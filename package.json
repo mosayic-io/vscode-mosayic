@@ -3,21 +3,47 @@
   "displayName": "Mosayic",
   "description": "Mosayic VS Code Extension",
   "version": "0.0.1",
+  "publisher": "mosayic",
   "engines": {
     "vscode": "^1.96.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
+    "authentication": [
+      {
+        "id": "mosayic",
+        "label": "Mosayic"
+      }
+    ],
     "commands": [
       {
-        "command": "vscode-mosayic.helloWorld",
-        "title": "Mosayic: Hello World"
+        "command": "vscode-mosayic.signIn",
+        "title": "Mosayic: Sign In"
+      },
+      {
+        "command": "vscode-mosayic.signOut",
+        "title": "Mosayic: Sign Out"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Mosayic",
+      "properties": {
+        "mosayic.apiUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8080",
+          "description": "URL of the Mosayic API server"
+        },
+        "mosayic.confirmCommands": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prompt before executing commands received from the Mosayic server. Disable to allow automatic execution."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -27,11 +53,15 @@
     "pretest": "npm run compile && npm run lint"
   },
   "devDependencies": {
-    "@types/vscode": "^1.96.0",
     "@types/node": "^22.x",
-    "typescript": "^5.7.0",
+    "@types/vscode": "^1.96.0",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "eslint": "^9.0.0"
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
   }
 }
