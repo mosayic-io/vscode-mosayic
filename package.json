@@ -38,9 +38,15 @@
           "description": "URL of the Mosayic API server"
         },
         "mosayic.confirmCommands": {
-          "type": "boolean",
-          "default": true,
-          "description": "Prompt before executing commands received from the Mosayic server. Disable to allow automatic execution."
+          "type": "string",
+          "default": "allowlisted",
+          "enum": ["allowlisted", "always", "never"],
+          "enumDescriptions": [
+            "Auto-approve known Mosayic commands (gh, firebase, gcloud, expo, supabase, etc.). Prompt for anything else.",
+            "Prompt before every command.",
+            "Never prompt. Trust all commands from the Mosayic server."
+          ],
+          "description": "Controls when to prompt before executing commands from the Mosayic server."
         }
       }
     }

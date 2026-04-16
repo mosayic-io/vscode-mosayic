@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
-import { getApiUrl, isInsecureRemoteUrl } from '../config';
+import { getApiUrl, isInsecureRemoteUrl, getConfirmMode, isAllowlistedCommand } from '../config';
 
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const PING_INTERVAL = 30000;
@@ -144,16 +144,23 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		});
 	}
 
-	private _handleMessage(data: { type: string; request_id?: string; command?: string }): void {
+	private _handleMessage(data: { type: string; request_id?: string; command?: string; name?: string; title?: string; path?: string }): void {
 		if (data.type === 'command' && data.request_id && data.command) {
 			void this._executeCommand(data.request_id, data.command);
+		} else if (data.type === 'terminal_command' && data.request_id && data.command) {
+			void this._runInTerminal(data.request_id, data.command, data.name);
+		} else if (data.type === 'pick_folder' && data.request_id) {
+			void this._pickFolder(data.request_id, data.title);
+		} else if (data.type === 'open_folder' && data.request_id && data.path) {
+			void this._openFolder(data.request_id, data.path);
 		}
 	}
 
 	private async _executeCommand(requestId: string, command: string): Promise<void> {
-		const confirmCommands = vscode.workspace.getConfiguration('mosayic').get<boolean>('confirmCommands', true);
+		const mode = getConfirmMode();
+		const needsPrompt = mode === 'always' || (mode === 'allowlisted' && !isAllowlistedCommand(command));
 
-		if (confirmCommands) {
+		if (needsPrompt) {
 			const redacted = this._redact(command);
 			const choice = await vscode.window.showWarningMessage(
 				`Mosayic server wants to run a command: ${redacted}`,
@@ -161,7 +168,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			);
 
 			if (choice === 'Allow All') {
-				await vscode.workspace.getConfiguration('mosayic').update('confirmCommands', false, vscode.ConfigurationTarget.Global);
+				await vscode.workspace.getConfiguration('mosayic').update('confirmCommands', 'never', vscode.ConfigurationTarget.Global);
 			} else if (choice !== 'Allow') {
 				this._log(`Command denied by user: ${redacted}`);
 				this._sendResult(requestId, '', 'Command denied by user', 1);
@@ -176,7 +183,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		const child = spawn(command, {
 			shell: true,
 			cwd: workspaceFolder,
-			timeout: 120_000,
+			timeout: 600_000,
 		});
 
 		let stdout = '';
@@ -214,6 +221,80 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			this._log(`  Process error: ${err.message}`);
 			this._sendResult(requestId, stdout, stderr + err.message, 1);
 		});
+	}
+
+	private async _runInTerminal(requestId: string, command: string, name?: string): Promise<void> {
+		const mode = getConfirmMode();
+		const needsPrompt = mode === 'always' || (mode === 'allowlisted' && !isAllowlistedCommand(command));
+
+		if (needsPrompt) {
+			const redacted = this._redact(command);
+			const choice = await vscode.window.showWarningMessage(
+				`Mosayic server wants to run in terminal: ${redacted}`,
+				'Allow', 'Allow All', 'Deny',
+			);
+
+			if (choice === 'Allow All') {
+				await vscode.workspace.getConfiguration('mosayic').update('confirmCommands', 'never', vscode.ConfigurationTarget.Global);
+			} else if (choice !== 'Allow') {
+				this._log(`Terminal command denied by user: ${redacted}`);
+				this._sendJson({ type: 'terminal_result', request_id: requestId, status: 'denied' });
+				return;
+			}
+		}
+
+		const terminalName = name || 'Mosayic';
+		this._log(`Opening terminal "${terminalName}": ${this._redact(command)}`);
+
+		const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const terminal = vscode.window.createTerminal({
+			name: terminalName,
+			cwd: workspaceFolder,
+			iconPath: new vscode.ThemeIcon('rocket'),
+		});
+		terminal.show();
+		terminal.sendText(command);
+
+		this._sendJson({ type: 'terminal_result', request_id: requestId, status: 'opened' });
+
+		// Notify when terminal closes
+		const listener = vscode.window.onDidCloseTerminal((closed) => {
+			if (closed === terminal) {
+				listener.dispose();
+				this._log(`Terminal "${terminalName}" closed`);
+				this._sendJson({ type: 'terminal_closed', request_id: requestId });
+			}
+		});
+	}
+
+	private async _openFolder(requestId: string, folderPath: string): Promise<void> {
+		this._log(`Opening folder: ${folderPath}`);
+		const uri = vscode.Uri.file(folderPath);
+		this._sendJson({ type: 'open_folder_result', request_id: requestId, status: 'opened' });
+		// This reloads the window — the extension will reconnect after
+		await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: false });
+	}
+
+	private async _pickFolder(requestId: string, title?: string): Promise<void> {
+		this._log(`Folder picker requested: ${title ?? 'Select folder'}`);
+
+		const uris = await vscode.window.showOpenDialog({
+			canSelectFolders: true,
+			canSelectFiles: false,
+			canSelectMany: false,
+			openLabel: title || 'Choose folder',
+			title: title || 'Choose folder',
+		});
+
+		const path = uris?.[0]?.fsPath ?? null;
+		this._log(path ? `Folder selected: ${path}` : 'Folder picker cancelled');
+		this._sendJson({ type: 'pick_folder_result', request_id: requestId, path });
+	}
+
+	private _sendJson(data: Record<string, unknown>): void {
+		if (this._ws?.readyState === WebSocket.OPEN) {
+			this._ws.send(JSON.stringify(data));
+		}
 	}
 
 	private _sendResult(requestId: string, stdout: string, stderr: string, exitCode: number): void {
