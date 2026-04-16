@@ -34,7 +34,7 @@
       "properties": {
         "mosayic.apiUrl": {
           "type": "string",
-          "default": "http://127.0.0.1:8080",
+          "default": "http://127.0.0.1:8090",
           "description": "URL of the Mosayic API server"
         },
         "mosayic.confirmCommands": {

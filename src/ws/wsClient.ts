@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import { WebSocket } from 'ws';
 import { getApiUrl, isInsecureRemoteUrl, getConfirmMode, isAllowlistedCommand } from '../config';
+import { TerminalRegistry } from './managedTerminal';
 
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const PING_INTERVAL = 30000;
@@ -17,6 +18,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	private _getToken: () => Promise<string | undefined>;
 	private _refreshToken: (() => Promise<boolean>) | undefined;
 	private _outputChannel: vscode.OutputChannel;
+	private _terminalRegistry = new TerminalRegistry();
 	// Set by the 'error' handler when an HTTP 403 is detected during the
 	// WebSocket upgrade. The ws library guarantees 'error' fires before
 	// 'close', so the 'close' handler reads this flag safely.
@@ -144,7 +146,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		});
 	}
 
-	private _handleMessage(data: { type: string; request_id?: string; command?: string; name?: string; title?: string; path?: string }): void {
+	private _handleMessage(data: { type: string; request_id?: string; session_id?: string; command?: string; name?: string; title?: string; path?: string; text?: string }): void {
 		if (data.type === 'command' && data.request_id && data.command) {
 			void this._executeCommand(data.request_id, data.command);
 		} else if (data.type === 'terminal_command' && data.request_id && data.command) {
@@ -153,6 +155,14 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			void this._pickFolder(data.request_id, data.title);
 		} else if (data.type === 'open_folder' && data.request_id && data.path) {
 			void this._openFolder(data.request_id, data.path);
+		} else if (data.type === 'start_dev_server' && data.request_id && data.command && data.session_id) {
+			this._startDevServer(data.request_id, data.session_id, data.command, data.name, data.path);
+		} else if (data.type === 'stop_dev_server' && data.request_id && data.session_id) {
+			this._stopDevServer(data.request_id, data.session_id);
+		} else if (data.type === 'terminal_input' && data.session_id && data.text) {
+			this._terminalInput(data.session_id, data.text);
+		} else if (data.type === 'dev_server_status' && data.request_id && data.session_id) {
+			this._devServerStatus(data.request_id, data.session_id);
 		}
 	}
 
@@ -291,6 +301,57 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		this._sendJson({ type: 'pick_folder_result', request_id: requestId, path });
 	}
 
+	private _startDevServer(requestId: string, sessionId: string, command: string, name?: string, cwd?: string): void {
+		const terminalName = name || 'Mosayic: Dev Server';
+		const workingDir = cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+		this._log(`Starting dev server [${sessionId}]: ${this._redact(command)} in ${workingDir ?? '(no cwd)'}`);
+
+		this._terminalRegistry.create(
+			sessionId,
+			command,
+			terminalName,
+			workingDir,
+			(text) => {
+				// Stream output to backend
+				this._sendJson({
+					type: 'dev_server_output',
+					session_id: sessionId,
+					text,
+				});
+			},
+			(code) => {
+				// Notify backend that the server exited
+				this._log(`Dev server [${sessionId}] exited with code ${code}`);
+				this._sendJson({
+					type: 'dev_server_exited',
+					session_id: sessionId,
+					exit_code: code,
+				});
+			},
+		);
+
+		this._sendJson({ type: 'dev_server_started', request_id: requestId, session_id: sessionId });
+	}
+
+	private _stopDevServer(requestId: string, sessionId: string): void {
+		this._log(`Stopping dev server [${sessionId}]`);
+		this._terminalRegistry.dispose(sessionId);
+		this._sendJson({ type: 'dev_server_stopped', request_id: requestId, session_id: sessionId });
+	}
+
+	private _terminalInput(sessionId: string, text: string): void {
+		const sent = this._terminalRegistry.sendInput(sessionId, text);
+		if (!sent) {
+			this._log(`terminal_input: no active session ${sessionId}`);
+		}
+	}
+
+	private _devServerStatus(requestId: string, sessionId: string): void {
+		const running = this._terminalRegistry.has(sessionId);
+		this._sendJson({ type: 'dev_server_status_result', request_id: requestId, session_id: sessionId, running });
+	}
+
 	private _sendJson(data: Record<string, unknown>): void {
 		if (this._ws?.readyState === WebSocket.OPEN) {
 			this._ws.send(JSON.stringify(data));
@@ -379,6 +440,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	dispose(): void {
 		this._disposed = true;
 		this._cleanup();
+		this._terminalRegistry.disposeAll();
 		this._outputChannel.dispose();
 	}
 }
