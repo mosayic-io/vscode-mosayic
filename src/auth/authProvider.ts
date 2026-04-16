@@ -9,9 +9,9 @@ const SESSIONS_KEY = 'mosayic.sessions';
 const REFRESH_TOKEN_KEY = 'mosayic.refreshToken';
 
 interface TokenData {
-	accessToken: string;
-	refreshToken: string;
-	userId: string;
+	access_token: string;
+	refresh_token: string;
+	user_id: string;
 	email: string;
 }
 
@@ -49,16 +49,16 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 
 		const session: vscode.AuthenticationSession = {
 			id: randomBytes(8).toString('hex'),
-			accessToken: tokenData.accessToken,
+			accessToken: tokenData.access_token,
 			account: {
-				id: tokenData.userId,
+				id: tokenData.user_id,
 				label: tokenData.email,
 			},
 			scopes: [],
 		};
 
 		await this._context.secrets.store(SESSIONS_KEY, JSON.stringify([session]));
-		await this._context.secrets.store(REFRESH_TOKEN_KEY, tokenData.refreshToken);
+		await this._context.secrets.store(REFRESH_TOKEN_KEY, tokenData.refresh_token);
 
 		this._sessionChangeEmitter.fire({ added: [session], removed: [], changed: [] });
 
@@ -112,11 +112,11 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 
 			const newSession: vscode.AuthenticationSession = {
 				...oldSession,
-				accessToken: data.accessToken,
+				accessToken: data.access_token,
 			};
 
 			await this._context.secrets.store(SESSIONS_KEY, JSON.stringify([newSession]));
-			await this._context.secrets.store(REFRESH_TOKEN_KEY, data.refreshToken);
+			await this._context.secrets.store(REFRESH_TOKEN_KEY, data.refresh_token);
 
 			this._sessionChangeEmitter.fire({ added: [], removed: [], changed: [newSession] });
 			return newSession;
@@ -185,17 +185,17 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 					return;
 				}
 
-				const accessToken = query.get('access_token');
-				const refreshToken = query.get('refresh_token');
-				const userId = query.get('user_id');
+				const access_token = query.get('access_token');
+				const refresh_token = query.get('refresh_token');
+				const user_id = query.get('user_id');
 				const email = query.get('email') || '';
 
-				if (!accessToken || !refreshToken || !userId) {
+				if (!access_token || !refresh_token || !user_id) {
 					reject(new Error('Incomplete authentication data received'));
 					return;
 				}
 
-				resolve({ accessToken, refreshToken, userId, email });
+				resolve({ access_token, refresh_token, user_id, email });
 			});
 		});
 	}

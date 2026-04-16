@@ -43,11 +43,12 @@ const ALLOWED_PREFIXES = [
 	'npm ',
 	'npx ',
 	'node ',
-	// Project scaffolding
+	// Project scaffolding and configuration
 	'mkdir ',
 	'git ',
 	'unzip ',
 	'sed ',
+	'jq ',
 ];
 
 export function isAllowlistedCommand(command: string): boolean {
