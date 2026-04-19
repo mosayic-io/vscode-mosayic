@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { MosayicAuthenticationProvider } from './auth/authProvider';
 import { UriEventHandler } from './auth/uriHandler';
-import { MosayicWebSocketClient } from './ws/wsClient';
-import { AUTH_TYPE } from './config';
+import { MosayicWebSocketClient, type WsState } from './ws/wsClient';
+import { AUTH_TYPE, getApiUrl } from './config';
 
 export function activate(context: vscode.ExtensionContext) {
 	const uriHandler = new UriEventHandler();
@@ -23,10 +23,82 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 	context.subscriptions.push(wsClient);
 
-	// Auto-connect WebSocket if already authenticated
+	// Status bar — always visible so the user can see what the extension is doing
+	const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+	statusBar.name = 'Mosayic';
+	context.subscriptions.push(statusBar);
+
+	function renderStatus(state: WsState, detail?: string): void {
+		const apiUrl = getApiUrl();
+		switch (state) {
+			case 'signed-out':
+				statusBar.text = '$(plug) Mosayic: signed out';
+				statusBar.tooltip = `Not signed in. Click to sign in.\nAPI: ${apiUrl}`;
+				statusBar.command = 'vscode-mosayic.signIn';
+				statusBar.backgroundColor = undefined;
+				break;
+			case 'idle':
+				statusBar.text = '$(circle-outline) Mosayic: idle';
+				statusBar.tooltip = `Idle. API: ${apiUrl}`;
+				statusBar.command = 'vscode-mosayic.showOutput';
+				statusBar.backgroundColor = undefined;
+				break;
+			case 'connecting':
+				statusBar.text = '$(sync~spin) Mosayic: connecting';
+				statusBar.tooltip = `Connecting to ${detail ?? apiUrl}/ws`;
+				statusBar.command = 'vscode-mosayic.showOutput';
+				statusBar.backgroundColor = undefined;
+				break;
+			case 'connected':
+				statusBar.text = '$(check) Mosayic: connected';
+				statusBar.tooltip = `Connected to ${detail ?? apiUrl}/ws`;
+				statusBar.command = 'vscode-mosayic.showOutput';
+				statusBar.backgroundColor = undefined;
+				break;
+			case 'reconnecting':
+				statusBar.text = `$(sync~spin) Mosayic: reconnecting`;
+				statusBar.tooltip = `Reconnecting (${detail ?? ''}). API: ${apiUrl}`;
+				statusBar.command = 'vscode-mosayic.showOutput';
+				statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+				break;
+			case 'auth-error':
+				statusBar.text = '$(key) Mosayic: auth failed';
+				statusBar.tooltip = `Authentication failed (${detail ?? 'unknown'}). Click to sign in again.`;
+				statusBar.command = 'vscode-mosayic.signIn';
+				statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+				break;
+			case 'error':
+				statusBar.text = '$(error) Mosayic: error';
+				statusBar.tooltip = `${detail ?? 'Connection error'}. Click to view logs.\nAPI: ${apiUrl}`;
+				statusBar.command = 'vscode-mosayic.showOutput';
+				statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+				break;
+		}
+		statusBar.show();
+	}
+
+	wsClient.onStateChange(renderStatus);
+
+	// Make the output channel easy to open from the status bar
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-mosayic.showOutput', () => {
+			wsClient.outputChannel.show();
+		}),
+	);
+
+	// Activation trail — always visible in the output channel, so the user can
+	// confirm the extension is actually running and see what state it found.
+	const apiUrl = getApiUrl();
+	const stamp = () => new Date().toLocaleTimeString();
+	wsClient.outputChannel.appendLine(`[${stamp()}] [info] Mosayic extension activated. API URL: ${apiUrl}`);
+
 	void vscode.authentication.getSession(AUTH_TYPE, [], { createIfNone: false }).then(session => {
 		if (session) {
+			wsClient.outputChannel.appendLine(`[${stamp()}] [auth] Saved session found for ${session.account.label}. Connecting WebSocket...`);
 			void wsClient.connect();
+		} else {
+			wsClient.outputChannel.appendLine(`[${stamp()}] [auth] No saved session — WebSocket will NOT connect until you sign in. Click the status bar or run "Mosayic: Sign In".`);
+			renderStatus('signed-out');
 		}
 	});
 

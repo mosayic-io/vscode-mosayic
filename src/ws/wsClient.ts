@@ -9,6 +9,15 @@ const PING_INTERVAL = 30000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024; // 10 MB
 
+export type WsState =
+	| 'signed-out'
+	| 'idle'
+	| 'connecting'
+	| 'connected'
+	| 'reconnecting'
+	| 'auth-error'
+	| 'error';
+
 export class MosayicWebSocketClient implements vscode.Disposable {
 	private _ws: WebSocket | undefined;
 	private _disposed = false;
@@ -19,6 +28,8 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	private _refreshToken: (() => Promise<boolean>) | undefined;
 	private _outputChannel: vscode.OutputChannel;
 	private _terminalRegistry = new TerminalRegistry();
+	private _state: WsState = 'idle';
+	private _onStateChange: ((state: WsState, detail?: string) => void) | undefined;
 	// Set by the 'error' handler when an HTTP 403 is detected during the
 	// WebSocket upgrade. The ws library guarantees 'error' fires before
 	// 'close', so the 'close' handler reads this flag safely.
@@ -33,6 +44,27 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		this._outputChannel = vscode.window.createOutputChannel('Mosayic WebSocket');
 	}
 
+	get state(): WsState {
+		return this._state;
+	}
+
+	get outputChannel(): vscode.OutputChannel {
+		return this._outputChannel;
+	}
+
+	onStateChange(cb: (state: WsState, detail?: string) => void): void {
+		this._onStateChange = cb;
+		// Emit current state so the listener syncs immediately
+		cb(this._state);
+	}
+
+	private _setState(state: WsState, detail?: string): void {
+		if (this._state === state) { return; }
+		this._state = state;
+		this._log(`state → ${state}${detail ? ` (${detail})` : ''}`);
+		this._onStateChange?.(state, detail);
+	}
+
 	async connect(): Promise<void> {
 		if (this._disposed) {
 			return;
@@ -43,19 +75,21 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 
 		const token = await this._getToken();
 		if (!token) {
-			this._log('No auth token available, skipping WebSocket connection');
+			this._logAuth('Not signed in — no access token. Skipping WebSocket connection. Run "Mosayic: Sign In" to authenticate.');
+			this._setState('signed-out');
 			return;
 		}
 
 		const apiUrl = getApiUrl();
 
 		if (isInsecureRemoteUrl(apiUrl)) {
-			this._log('WARNING: Connecting over plaintext HTTP to a remote server. Tokens and commands will be sent unencrypted.');
+			this._logConn(`WARNING: plaintext HTTP to a remote host (${apiUrl}). Tokens and commands will be unencrypted.`);
 		}
 
 		const wsUrl = apiUrl.replace(/^http/, 'ws') + '/ws';
 
-		this._log(`Connecting to ${apiUrl}/ws ...`);
+		this._logConn(`Dialing ${wsUrl} (token prefix=${token.slice(0, 10)}…)`);
+		this._setState('connecting', apiUrl);
 
 		const ws = new WebSocket(wsUrl, {
 			headers: {
@@ -65,9 +99,10 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		this._ws = ws;
 
 		ws.on('open', () => {
-			this._log('Connected');
+			this._logConn(`Connected to ${apiUrl}/ws`);
 			this._reconnectAttempt = 0;
 			this._startPing();
+			this._setState('connected', apiUrl);
 		});
 
 		ws.on('message', (raw: Buffer) => {
@@ -83,12 +118,13 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			this._stopPing();
 
 			if (this._upgradeRejected || code === 4003) {
-				this._log(`Authentication failed (code=${code})`);
+				this._logAuth(`Server closed WebSocket with auth code ${code}. Token is missing, expired, or rejected.`);
+				this._setState('auth-error', `code=${code}`);
 				void this._handleAuthFailure();
 				return;
 			}
 
-			this._log(`Disconnected (code=${code}, reason=${reason.toString()})`);
+			this._logConn(`WebSocket closed (code=${code}, reason=${reason.toString() || 'none'})`);
 			if (!this._disposed) {
 				this._scheduleReconnect();
 			}
@@ -97,40 +133,45 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		ws.on('error', (err: Error) => {
 			if (err.message.includes('403')) {
 				this._upgradeRejected = true;
-				this._log('Server returned 403 — token is expired or invalid');
+				this._logAuth('Server returned HTTP 403 during WebSocket upgrade — token is expired or invalid.');
+			} else if (/ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET/.test(err.message)) {
+				this._logConn(`Cannot reach API: ${err.message}. Is the server running at ${apiUrl}?`);
+				this._setState('error', err.message);
 			} else {
-				this._log(`Connection error: ${err.message}`);
+				this._logConn(`Unexpected WebSocket error: ${err.message}`);
+				this._setState('error', err.message);
 			}
 		});
 	}
 
 	disconnect(): void {
 		this._cleanup();
-		this._log('Disconnected by client');
+		this._logAuth('Disconnected by client (signed out or extension shutting down)');
+		this._setState('signed-out');
 	}
 
 	private async _handleAuthFailure(): Promise<void> {
 		if (!this._refreshToken) {
-			this._log('No token refresh available — sign in again to reconnect');
+			this._logAuth('No refresh token handler available — sign in again to reconnect.');
 			this._promptSignIn();
 			return;
 		}
 
-		this._log('Attempting token refresh...');
+		this._logAuth('Attempting token refresh…');
 		let refreshed = await this._refreshToken();
 
 		if (!refreshed) {
-			this._log('First refresh attempt failed, retrying in 2s...');
+			this._logAuth('First refresh attempt failed, retrying in 2s…');
 			await new Promise((r) => setTimeout(r, 2000));
 			refreshed = await this._refreshToken();
 		}
 
 		if (refreshed) {
-			this._log('Token refreshed — reconnecting');
+			this._logAuth('Token refreshed successfully — reconnecting.');
 			this._reconnectAttempt = 0;
 			this._reconnectTimer = setTimeout(() => void this.connect(), 500);
 		} else {
-			this._log('Token refresh failed — sign in again to reconnect');
+			this._logAuth('Token refresh failed — sign in again to reconnect.');
 			this._promptSignIn();
 		}
 	}
@@ -155,6 +196,8 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			void this._pickFolder(data.request_id, data.title);
 		} else if (data.type === 'open_folder' && data.request_id && data.path) {
 			void this._openFolder(data.request_id, data.path);
+		} else if (data.type === 'send_to_terminal' && data.name && data.text) {
+			this._sendToTerminal(data.name, data.text);
 		} else if (data.type === 'start_dev_server' && data.request_id && data.command && data.session_id) {
 			this._startDevServer(data.request_id, data.session_id, data.command, data.name, data.path);
 		} else if (data.type === 'stop_dev_server' && data.request_id && data.session_id) {
@@ -186,13 +229,13 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			}
 		}
 
-		this._log(`Executing: ${this._redact(command)}`);
-
 		const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const cwd = workspaceFolder || require('os').homedir();
+		this._log(`Executing: ${this._redact(command)} (cwd: ${cwd})`);
 
 		const child = spawn(command, {
 			shell: true,
-			cwd: workspaceFolder,
+			cwd,
 			timeout: 600_000,
 		});
 
@@ -254,12 +297,13 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		}
 
 		const terminalName = name || 'Mosayic';
-		this._log(`Opening terminal "${terminalName}": ${this._redact(command)}`);
-
 		const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const terminalCwd = workspaceFolder || require('os').homedir();
+		this._log(`Opening terminal "${terminalName}": ${this._redact(command)} (cwd: ${terminalCwd})`);
+
 		const terminal = vscode.window.createTerminal({
 			name: terminalName,
-			cwd: workspaceFolder,
+			cwd: terminalCwd,
 			iconPath: new vscode.ThemeIcon('rocket'),
 		});
 		terminal.show();
@@ -275,6 +319,16 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				this._sendJson({ type: 'terminal_closed', request_id: requestId });
 			}
 		});
+	}
+
+	private _sendToTerminal(name: string, text: string): void {
+		const terminal = vscode.window.terminals.find(t => t.name === name);
+		if (terminal) {
+			terminal.sendText(text, false); // false = don't append newline
+			this._log(`Sent "${text}" to terminal "${name}"`);
+		} else {
+			this._log(`Terminal "${name}" not found`);
+		}
 	}
 
 	private async _openFolder(requestId: string, folderPath: string): Promise<void> {
@@ -398,14 +452,16 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 
 	private _scheduleReconnect(): void {
 		if (this._reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
-			this._log(`Giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`);
+			this._logConn(`Giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts.`);
+			this._setState('error', 'max reconnects exceeded');
 			this._promptSignIn();
 			return;
 		}
 
 		const delay = RECONNECT_DELAYS[Math.min(this._reconnectAttempt, RECONNECT_DELAYS.length - 1)];
 		this._reconnectAttempt++;
-		this._log(`Reconnecting in ${delay / 1000}s (attempt ${this._reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})`);
+		this._logConn(`Reconnecting in ${delay / 1000}s (attempt ${this._reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS}).`);
+		this._setState('reconnecting', `attempt ${this._reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS}`);
 		this._reconnectTimer = setTimeout(() => void this.connect(), delay);
 	}
 
@@ -434,7 +490,17 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	}
 
 	private _log(message: string): void {
-		this._outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
+		this._outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [info] ${message}`);
+	}
+
+	private _logAuth(message: string): void {
+		this._outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [auth] ${message}`);
+		console.log(`[mosayic][auth] ${message}`);
+	}
+
+	private _logConn(message: string): void {
+		this._outputChannel.appendLine(`[${new Date().toLocaleTimeString()}] [conn] ${message}`);
+		console.log(`[mosayic][conn] ${message}`);
 	}
 
 	dispose(): void {
