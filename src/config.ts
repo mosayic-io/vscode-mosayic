@@ -19,41 +19,67 @@ export function getConfirmMode(): ConfirmMode {
 }
 
 /**
- * Command prefixes that Mosayic is expected to send from the dashboard.
- * Commands starting with any of these are auto-approved in "allowlisted" mode.
- * The list is intentionally conservative — only read-only or standard
- * Mosayic-workflow commands belong here.
+ * First tokens Mosayic's backend is expected to invoke. Commands whose first
+ * whitespace-separated token matches (case-insensitively) are auto-approved in
+ * "allowlisted" mode. List is intentionally conservative — only the CLIs the
+ * Mosayic workflow actually drives.
  */
-const ALLOWED_PREFIXES = [
-	// GitHub CLI
-	'gh ',
-	// Firebase CLI
-	'firebase ',
-	// Google Cloud CLI
-	'gcloud ',
-	// Expo / React Native
-	'expo ',
-	'npx expo ',
-	'eas ',
-	'npx eas ',
-	// Supabase CLI
-	'supabase ',
-	'npx supabase ',
-	// Node / npm (for project setup)
-	'npm ',
-	'npx ',
-	'node ',
-	// Project scaffolding and configuration
-	'mkdir ',
-	'git ',
-	'unzip ',
-	'sed ',
-	'jq ',
+const ALLOWED_FIRST_TOKENS = new Set<string>([
+	'gh',
+	'firebase',
+	'gcloud',
+	'expo',
+	'eas',
+	'supabase',
+	'npm',
+	'npx',
+	'node',
+	'mkdir',
+	'git',
+	'unzip',
+	'sed',
+	'jq',
+	'ssh-keygen',
+	'rm',
+	'mv',
+	'cd',
+	'printf',
+	'uv',
+]);
+
+/**
+ * Characters / sequences that unambiguously turn a single allowlisted command
+ * into something the user did not consent to. Present in the command string =>
+ * the command must NOT be auto-approved, even if the first token is allowed.
+ *
+ * We still allow the well-known chaining operators the Mosayic backend uses
+ * (``&&``, ``||``, ``|``, ``>``, ``<``) — those are widespread in legitimate
+ * scaffold / secrets flows. The list below is what has no benign use in our
+ * backend-sent commands.
+ */
+const SHELL_ABUSE_PATTERNS: RegExp[] = [
+	/;/,           // command separator
+	/\$\(/,        // command substitution
+	/`/,           // backtick command substitution
+	/\r|\n/,       // embedded newline — injects another command line
 ];
 
-export function isAllowlistedCommand(command: string): boolean {
+export function isShellAbuseCommand(command: string): boolean {
+	return SHELL_ABUSE_PATTERNS.some(re => re.test(command));
+}
+
+function firstToken(command: string): string {
 	const trimmed = command.trimStart();
-	return ALLOWED_PREFIXES.some(prefix => trimmed.startsWith(prefix));
+	const match = /^[^\s]+/.exec(trimmed);
+	return match ? match[0] : '';
+}
+
+export function isAllowlistedCommand(command: string): boolean {
+	if (isShellAbuseCommand(command)) {
+		return false;
+	}
+	const token = firstToken(command).toLowerCase();
+	return ALLOWED_FIRST_TOKENS.has(token);
 }
 
 /**

@@ -140,4 +140,11 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showInformationMessage('Signed out of Mosayic.');
 		})
 	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-mosayic.resetCommandPrompts', () => {
+			wsClient.resetCommandPrompts();
+			vscode.window.showInformationMessage('Mosayic will prompt again before running non-allowlisted commands.');
+		})
+	);
 }

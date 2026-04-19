@@ -1,9 +1,7 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
 import { UriEventHandler } from './uriHandler';
-import { AUTH_TYPE, AUTH_NAME, getApiUrl } from '../config';
-
-export { AUTH_TYPE };
+import { AUTH_NAME, AUTH_TYPE, getApiUrl } from '../config';
 
 const SESSIONS_KEY = 'mosayic.sessions';
 const REFRESH_TOKEN_KEY = 'mosayic.refreshToken';
@@ -122,7 +120,13 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 			return newSession;
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : String(e);
-			console.warn(`[Mosayic] Token refresh failed: ${msg}`);
+			// Surface the failure reason into VS Code's own logs rather than
+			// console.warn (which would echo into the global Debug Console and
+			// can be captured by other tools). The WS client will re-prompt
+			// sign-in on its side.
+			void vscode.window.showWarningMessage(
+				`Mosayic: token refresh failed (${msg}). Please sign in again.`,
+			);
 			return undefined;
 		}
 	}

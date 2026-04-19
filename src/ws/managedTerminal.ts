@@ -11,6 +11,8 @@ import { spawn, type ChildProcess } from 'child_process';
  */
 export class ManagedTerminal implements vscode.Pseudoterminal {
 	private _writeEmitter = new vscode.EventEmitter<string>();
+	// Pseudoterminal.onDidClose fires when the underlying process exits — VS
+	// Code uses it to show "[Process exited with code N]" in the terminal.
 	private _closeEmitter = new vscode.EventEmitter<number | void>();
 	private _child: ChildProcess | undefined;
 	private _closed = false;
@@ -84,13 +86,17 @@ export class ManagedTerminal implements vscode.Pseudoterminal {
 			const exitCode = code ?? 1;
 			this._writeEmitter.fire(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
 			this._writeEmitter.fire(`\x1b[90m[Terminal will remain open for inspection]\x1b[0m\r\n`);
-			// Don't close the terminal — let the user read the output
+			// Don't close the terminal UI — user may want to read the output —
+			// but signal pseudoterminal closure so VS Code stops accepting input
+			// and callers relying on onDidClose can clean up.
+			this._closeEmitter.fire(exitCode);
 			this._onExit(exitCode);
 		});
 
 		child.on('error', (err: Error) => {
 			this._writeEmitter.fire(`\r\n\x1b[31m[Error: ${err.message}]\x1b[0m\r\n`);
 			this._writeEmitter.fire(`\x1b[90m[Terminal will remain open for inspection]\x1b[0m\r\n`);
+			this._closeEmitter.fire(1);
 			this._onExit(1);
 		});
 	}
