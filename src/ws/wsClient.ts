@@ -201,6 +201,10 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	// persist a "show this on next activation" marker that survives the
 	// reload.
 	private _onScaffoldComplete: ((path: string) => void) | undefined;
+	// Most recent terminal name created via terminal_command. Used by the
+	// /focus URI handler to land the user on the right terminal after the
+	// dashboard's "open VS Code" deep link brings the window to the front.
+	private _lastTerminalName: string | undefined;
 
 	constructor(
 		getToken: () => Promise<string | undefined>,
@@ -241,6 +245,28 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	resetCommandPrompts(): void {
 		this._sessionAllowAll = false;
 		this._log('Command prompts re-enabled for this session.');
+	}
+
+	/**
+	 * Bring the most recent Mosayic terminal to the front. Called by the
+	 * "/focus" URI handler after the dashboard hands off to a terminal flow
+	 * (e.g. "Create iPhone development build") so the user lands on the
+	 * running terminal instead of whatever VS Code happened to be showing.
+	 *
+	 * The OS-level focus shift is already handled by VS Code receiving the
+	 * URI; this just picks the right terminal inside the window.
+	 */
+	focusLastTerminal(): void {
+		const target = this._lastTerminalName
+			? vscode.window.terminals.find(t => t.name === this._lastTerminalName)
+			: undefined;
+		const fallback = target ?? vscode.window.terminals.find(t => t.name.startsWith('Mosayic'));
+		if (fallback) {
+			fallback.show(false);
+			this._log(`Focused terminal "${fallback.name}"`);
+		} else {
+			this._log('No Mosayic terminal to focus.');
+		}
 	}
 
 	/**
@@ -571,6 +597,10 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			});
 			terminal.show();
 			terminal.sendText(command);
+			// Remember which terminal the dashboard's "open VS Code" focus URI
+			// should land the user on. We track by name because Terminal
+			// instances become stale when closed.
+			this._lastTerminalName = terminalName;
 
 			this._sendJson({ type: 'terminal_result', request_id: requestId, status: 'opened' });
 

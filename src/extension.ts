@@ -180,6 +180,17 @@ export function activate(context: vscode.ExtensionContext) {
 			await wsClient.forceReconnect();
 		})
 	);
+
+	// Triggered by the dashboard's "Open VS Code" button on flows that just
+	// kicked off a terminal command (e.g. EAS build) via
+	// vscode://mosayic.vscode-mosayic/focus. The OS-level focus shift comes
+	// from VS Code receiving the URI; this just lands the user on the
+	// terminal that was just spawned.
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-mosayic.focus', () => {
+			wsClient.focusLastTerminal();
+		})
+	);
 }
 
 async function showPendingScaffoldNotice(context: vscode.ExtensionContext): Promise<void> {

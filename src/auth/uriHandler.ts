@@ -10,6 +10,10 @@ export class UriEventHandler extends vscode.EventEmitter<vscode.Uri> implements 
 			vscode.commands.executeCommand('vscode-mosayic.connect');
 			return;
 		}
+		if (uri.path === '/focus') {
+			vscode.commands.executeCommand('vscode-mosayic.focus');
+			return;
+		}
 		this.fire(uri);
 	}
 }

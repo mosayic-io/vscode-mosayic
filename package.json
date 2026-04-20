@@ -2,7 +2,7 @@
   "name": "vscode-mosayic",
   "displayName": "Mosayic",
   "description": "Mosayic VS Code Extension",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "mosayic",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",

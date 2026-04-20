@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] - 2026-04-20
+
+### Added
+- New `vscode-mosayic.focus` command, wired to `vscode://mosayic.vscode-mosayic/focus`. Brings the most recently spawned Mosayic terminal to the front so dashboard hand-offs (e.g. "Create iPhone development build") land the user on the running build instead of whatever VS Code happened to be showing.
+
 ## [0.0.4] - 2026-04-20
 
 ### Added
