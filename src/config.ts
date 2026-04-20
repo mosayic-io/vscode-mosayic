@@ -3,8 +3,32 @@ import * as vscode from 'vscode';
 export const AUTH_TYPE = 'mosayic';
 export const AUTH_NAME = 'Mosayic';
 
+export const PROD_API_URL = 'https://mosayic-api-service-336793731775.us-east1.run.app';
+export const DEV_API_URL = 'http://127.0.0.1:8090';
+
+export type Environment = 'prod' | 'dev' | 'custom';
+
+export function getEnvironment(): Environment {
+	const raw = vscode.workspace.getConfiguration('mosayic').get<string>('environment', 'prod');
+	if (raw === 'prod' || raw === 'dev' || raw === 'custom') { return raw; }
+	return 'prod';
+}
+
+export async function setEnvironment(env: Environment): Promise<void> {
+	await vscode.workspace.getConfiguration('mosayic').update(
+		'environment',
+		env,
+		vscode.ConfigurationTarget.Global,
+	);
+}
+
 export function getApiUrl(): string {
-	return vscode.workspace.getConfiguration('mosayic').get<string>('apiUrl', 'https://mosayic-api-service-336793731775.us-east1.run.app');
+	const env = getEnvironment();
+	if (env === 'dev') { return DEV_API_URL; }
+	if (env === 'custom') {
+		return vscode.workspace.getConfiguration('mosayic').get<string>('apiUrl', PROD_API_URL);
+	}
+	return PROD_API_URL;
 }
 
 export type ConfirmMode = 'allowlisted' | 'always' | 'never';

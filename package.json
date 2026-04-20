@@ -2,7 +2,7 @@
   "name": "vscode-mosayic",
   "displayName": "Mosayic",
   "description": "Mosayic VS Code Extension",
-  "version": "0.0.5",
+  "version": "0.0.7",
   "publisher": "mosayic",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -58,15 +58,42 @@
       {
         "command": "vscode-mosayic.resetCommandPrompts",
         "title": "Mosayic: Reset Command Prompts"
+      },
+      {
+        "command": "vscode-mosayic.switchBackend",
+        "title": "Mosayic: Switch Backend\u2026"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "vscode-mosayic.switchBackend",
+          "when": "config.mosayic.showDevCommands"
+        }
+      ]
+    },
     "configuration": {
       "title": "Mosayic",
       "properties": {
+        "mosayic.environment": {
+          "type": "string",
+          "default": "prod",
+          "enum": [
+            "prod",
+            "dev",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "Production backend (default).",
+            "Local development backend (http://127.0.0.1:8090).",
+            "Use the URL specified in mosayic.apiUrl."
+          ],
+          "description": "Which Mosayic backend the extension talks to."
+        },
         "mosayic.apiUrl": {
           "type": "string",
           "default": "https://mosayic-api-service-336793731775.us-east1.run.app",
-          "description": "URL of the Mosayic API server. Change this only if you are running a local or staging backend."
+          "description": "Custom Mosayic API URL. Only used when mosayic.environment is set to \"custom\"."
         },
         "mosayic.confirmCommands": {
           "type": "string",
@@ -82,6 +109,11 @@
             "Never prompt. Trust all commands from the Mosayic server."
           ],
           "description": "Controls when to prompt before executing commands from the Mosayic server."
+        },
+        "mosayic.showDevCommands": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show developer-only commands (e.g. \"Mosayic: Switch Backend\u2026\") in the command palette. For Mosayic contributors."
         }
       }
     }

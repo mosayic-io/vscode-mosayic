@@ -2,12 +2,26 @@ import * as vscode from 'vscode';
 import { MosayicAuthenticationProvider } from './auth/authProvider';
 import { UriEventHandler } from './auth/uriHandler';
 import { MosayicWebSocketClient, type WsState } from './ws/wsClient';
-import { AUTH_TYPE, getApiUrl } from './config';
+import {
+	AUTH_TYPE,
+	DEV_API_URL,
+	PROD_API_URL,
+	getApiUrl,
+	getEnvironment,
+	setEnvironment,
+	type Environment,
+} from './config';
 
 // Survives a window reload — set just before openFolder, read on next
 // activation to pop the post-scaffold dialog in the new workspace context.
 const SCAFFOLD_NOTICE_KEY = 'mosayic.pendingScaffoldNotice';
 const SCAFFOLD_NOTICE_MAX_AGE_MS = 60_000;
+
+// Last backend URL that issued the currently stored session tokens. If the
+// resolved API URL no longer matches, the session is stale (user switched
+// environments) and we sign out rather than send prod tokens to dev (or vice
+// versa).
+const LAST_API_URL_KEY = 'mosayic.lastApiUrl';
 
 interface PendingScaffoldNotice {
 	path: string;
@@ -110,7 +124,26 @@ export function activate(context: vscode.ExtensionContext) {
 	const stamp = () => new Date().toLocaleTimeString();
 	wsClient.outputChannel.appendLine(`[${stamp()}] [info] Mosayic extension activated. API URL: ${apiUrl}`);
 
-	void vscode.authentication.getSession(AUTH_TYPE, [], { createIfNone: false }).then(session => {
+	void (async () => {
+		const storedUrl = context.globalState.get<string>(LAST_API_URL_KEY);
+		const session = await vscode.authentication.getSession(AUTH_TYPE, [], { createIfNone: false });
+
+		if (session && storedUrl && storedUrl !== apiUrl) {
+			wsClient.outputChannel.appendLine(
+				`[${stamp()}] [auth] API URL changed (${storedUrl} -> ${apiUrl}). Clearing stale session.`,
+			);
+			const sessions = await authProvider.getSessions();
+			for (const s of sessions) {
+				await authProvider.removeSession(s.id);
+			}
+			await context.globalState.update(LAST_API_URL_KEY, undefined);
+			renderStatus('signed-out');
+			void vscode.window.showInformationMessage(
+				`Mosayic backend changed to ${apiUrl}. Please sign in again.`,
+			);
+			return;
+		}
+
 		if (session) {
 			wsClient.outputChannel.appendLine(`[${stamp()}] [auth] Saved session found for ${session.account.label}. Connecting WebSocket...`);
 			void wsClient.connect();
@@ -118,14 +151,16 @@ export function activate(context: vscode.ExtensionContext) {
 			wsClient.outputChannel.appendLine(`[${stamp()}] [auth] No saved session — WebSocket will NOT connect until you sign in. Click the status bar or run "Mosayic: Sign In".`);
 			renderStatus('signed-out');
 		}
-	});
+	})();
 
 	// React to auth session changes
 	context.subscriptions.push(
 		authProvider.onDidChangeSessions(e => {
 			if ((e.added?.length ?? 0) > 0 || (e.changed?.length ?? 0) > 0) {
+				void context.globalState.update(LAST_API_URL_KEY, getApiUrl());
 				void wsClient.connect();
 			} else if ((e.removed?.length ?? 0) > 0) {
+				void context.globalState.update(LAST_API_URL_KEY, undefined);
 				wsClient.disconnect();
 			}
 		})
@@ -164,6 +199,62 @@ export function activate(context: vscode.ExtensionContext) {
 			wsClient.resetCommandPrompts();
 			vscode.window.showInformationMessage('Mosayic will prompt again before running non-allowlisted commands.');
 		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-mosayic.switchBackend', async () => {
+			const current = getEnvironment();
+			interface BackendPick extends vscode.QuickPickItem {
+				env: Environment;
+			}
+			const items: BackendPick[] = [
+				{
+					env: 'prod',
+					label: 'Production',
+					description: PROD_API_URL,
+					detail: current === 'prod' ? 'Currently selected' : undefined,
+				},
+				{
+					env: 'dev',
+					label: 'Development',
+					description: DEV_API_URL,
+					detail: current === 'dev' ? 'Currently selected' : undefined,
+				},
+				{
+					env: 'custom',
+					label: 'Custom',
+					description: 'Use the URL in mosayic.apiUrl',
+					detail: current === 'custom' ? 'Currently selected' : undefined,
+				},
+			];
+			const picked = await vscode.window.showQuickPick(items, {
+				placeHolder: `Switch Mosayic backend (currently: ${current})`,
+				matchOnDescription: true,
+			});
+			if (!picked || picked.env === current) { return; }
+
+			await setEnvironment(picked.env);
+
+			// Clear any session from the previous environment so we don't send
+			// stale tokens to a different backend.
+			const sessions = await authProvider.getSessions();
+			for (const session of sessions) {
+				await authProvider.removeSession(session.id);
+			}
+
+			wsClient.outputChannel.appendLine(
+				`[${stamp()}] [config] Switched backend to "${picked.env}" (${getApiUrl()}). Previous session cleared — run "Mosayic: Sign In" to reconnect.`,
+			);
+
+			const signIn = 'Sign In';
+			const choice = await vscode.window.showInformationMessage(
+				`Mosayic backend switched to ${picked.label} (${getApiUrl()}). You'll need to sign in again.`,
+				signIn,
+			);
+			if (choice === signIn) {
+				await vscode.commands.executeCommand('vscode-mosayic.signIn');
+			}
+		}),
 	);
 
 	// Triggered by the dashboard's "Open VS Code" button via the

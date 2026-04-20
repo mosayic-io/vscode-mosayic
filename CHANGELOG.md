@@ -4,6 +4,17 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.7] - 2026-04-20
+
+### Added
+- `mosayic.environment` setting (`prod` | `dev` | `custom`, default `prod`) — picks which backend the extension talks to without requiring the user to paste a URL. Dev maps to the local backend, prod to the Cloud Run service, custom falls back to `mosayic.apiUrl`.
+- `Mosayic: Switch Backend…` command — QuickPick of prod/dev/custom that writes the setting and clears the existing session in one step. Hidden from the command palette unless `mosayic.showDevCommands` is `true`, so it doesn't surface to end users.
+- `mosayic.showDevCommands` setting (default `false`) — gates developer-only commands in the palette via a `when` clause.
+
+### Changed
+- `getApiUrl()` now resolves from `mosayic.environment` with hardcoded `PROD_API_URL` and `DEV_API_URL` constants. `mosayic.apiUrl` is only consulted when environment is `custom`.
+- On activation, if the resolved API URL no longer matches the URL that issued the stored session, the extension clears the session automatically — prevents sending prod tokens to a dev backend after a switch.
+
 ## [0.0.5] - 2026-04-20
 
 ### Added
