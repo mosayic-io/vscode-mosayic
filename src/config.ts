@@ -4,7 +4,7 @@ export const AUTH_TYPE = 'mosayic';
 export const AUTH_NAME = 'Mosayic';
 
 export function getApiUrl(): string {
-	return vscode.workspace.getConfiguration('mosayic').get<string>('apiUrl', 'http://127.0.0.1:8090');
+	return vscode.workspace.getConfiguration('mosayic').get<string>('apiUrl', 'https://mosayic-api-service-336793731775.us-east1.run.app');
 }
 
 export type ConfirmMode = 'allowlisted' | 'always' | 'never';

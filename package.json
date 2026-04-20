@@ -2,7 +2,7 @@
   "name": "vscode-mosayic",
   "displayName": "Mosayic",
   "description": "Mosayic VS Code Extension",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "publisher": "mosayic",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -31,7 +31,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "authentication": [
@@ -63,13 +65,17 @@
       "properties": {
         "mosayic.apiUrl": {
           "type": "string",
-          "default": "http://127.0.0.1:8090",
-          "description": "URL of the Mosayic API server"
+          "default": "https://mosayic-api-service-336793731775.us-east1.run.app",
+          "description": "URL of the Mosayic API server. Change this only if you are running a local or staging backend."
         },
         "mosayic.confirmCommands": {
           "type": "string",
           "default": "allowlisted",
-          "enum": ["allowlisted", "always", "never"],
+          "enum": [
+            "allowlisted",
+            "always",
+            "never"
+          ],
           "enumDescriptions": [
             "Auto-approve known Mosayic commands (gh, firebase, gcloud, expo, supabase, etc.). Prompt for anything else.",
             "Prompt before every command.",
@@ -81,11 +87,13 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run package",
+    "compile": "node esbuild.mjs",
+    "package": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p ./ --noEmit",
     "lint": "eslint src",
-    "pretest": "npm run compile && npm run lint"
+    "pretest": "npm run typecheck && npm run lint"
   },
   "devDependencies": {
     "@types/node": "^22.x",
@@ -93,6 +101,7 @@
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "esbuild": "^0.28.0",
     "eslint": "^9.0.0",
     "typescript": "^5.7.0"
   },

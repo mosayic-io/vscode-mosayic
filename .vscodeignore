@@ -9,8 +9,10 @@ node_modules/**
 .editorconfig
 .eslintrc*
 eslint.config.*
+esbuild.mjs
 tsconfig.json
 tsconfig.*.json
+CLAUDE.md
 
 **/*.map
 **/*.ts

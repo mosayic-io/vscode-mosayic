@@ -32,8 +32,8 @@ export type WsState =
 type IncomingMessage =
 	| { type: 'command'; request_id: string; command: string }
 	| { type: 'terminal_command'; request_id: string; command: string; name?: string }
-	| { type: 'pick_folder'; request_id: string; title?: string }
-	| { type: 'open_folder'; request_id: string; path: string }
+	| { type: 'pick_folder'; request_id: string; title?: string; return_url?: string }
+	| { type: 'open_folder'; request_id: string; path: string; notice?: 'scaffold_complete' }
 	| { type: 'send_to_terminal'; name: string; text: string }
 	| { type: 'start_dev_server'; request_id: string; session_id: string; command: string; name?: string; path?: string }
 	| { type: 'stop_dev_server'; request_id: string; session_id: string }
@@ -62,12 +62,18 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 			return undefined;
 		case 'pick_folder':
 			if (isString(m.request_id)) {
-				return { type, request_id: m.request_id, title: isString(m.title) ? m.title : undefined };
+				return {
+					type,
+					request_id: m.request_id,
+					title: isString(m.title) ? m.title : undefined,
+					return_url: isString(m.return_url) ? m.return_url : undefined,
+				};
 			}
 			return undefined;
 		case 'open_folder':
 			if (isString(m.request_id) && isString(m.path)) {
-				return { type, request_id: m.request_id, path: m.path };
+				const notice = m.notice === 'scaffold_complete' ? 'scaffold_complete' : undefined;
+				return { type, request_id: m.request_id, path: m.path, notice };
 			}
 			return undefined;
 		case 'send_to_terminal':
@@ -190,18 +196,26 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		[K in IncomingMessage['type']]: (m: Extract<IncomingMessage, { type: K }>) => void;
 	};
 
+	// Called just before openFolder reloads the workspace, when the backend
+	// flagged the open as the end of a scaffold. Lets the host extension
+	// persist a "show this on next activation" marker that survives the
+	// reload.
+	private _onScaffoldComplete: ((path: string) => void) | undefined;
+
 	constructor(
 		getToken: () => Promise<string | undefined>,
 		refreshToken?: () => Promise<boolean>,
+		onScaffoldComplete?: (path: string) => void,
 	) {
 		this._getToken = getToken;
 		this._refreshToken = refreshToken;
+		this._onScaffoldComplete = onScaffoldComplete;
 		this._outputChannel = vscode.window.createOutputChannel('Mosayic WebSocket');
 		this._handlers = {
 			command: (m) => void this._executeCommand(m.request_id, m.command),
 			terminal_command: (m) => void this._runInTerminal(m.request_id, m.command, m.name),
-			pick_folder: (m) => void this._pickFolder(m.request_id, m.title),
-			open_folder: (m) => void this._openFolder(m.request_id, m.path),
+			pick_folder: (m) => void this._pickFolder(m.request_id, m.title, m.return_url),
+			open_folder: (m) => void this._openFolder(m.request_id, m.path, m.notice),
 			send_to_terminal: (m) => this._sendToTerminal(m.name, m.text),
 			start_dev_server: (m) => this._startDevServer(m.request_id, m.session_id, m.command, m.name, m.path),
 			stop_dev_server: (m) => this._stopDevServer(m.request_id, m.session_id),
@@ -227,6 +241,22 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	resetCommandPrompts(): void {
 		this._sessionAllowAll = false;
 		this._log('Command prompts re-enabled for this session.');
+	}
+
+	/**
+	 * Force a fresh connection attempt. Resets the reconnect counter so a
+	 * client that had given up after MAX_RECONNECT_ATTEMPTS gets fresh tries.
+	 * Used by the "wake" URI handler when the user clicks the dashboard's
+	 * "Open VS Code" button.
+	 */
+	async forceReconnect(): Promise<void> {
+		this._reconnectAttempt = 0;
+		if (this._reconnectTimer) {
+			clearTimeout(this._reconnectTimer);
+			this._reconnectTimer = undefined;
+		}
+		this._logConn('Wake-up requested — forcing fresh connection attempt.');
+		await this.connect();
 	}
 
 	private _setState(state: WsState, detail?: string): void {
@@ -436,8 +466,28 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				return;
 			}
 
-			const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-			const cwd = workspaceFolder || homedir();
+			// Node's spawn with shell:true returns ENOENT for /bin/sh if cwd
+			// doesn't exist on disk — this happens when VS Code has a stale
+			// workspace folder open whose path was deleted, or when the
+			// workspace is a non-local URI (vscode-vfs, vscode-remote, etc.).
+			// Validate before spawn so we fail with a useful message instead of
+			// "spawn /bin/sh ENOENT", and so scaffold-style commands (which
+			// start with cd or mkdir -p) can run even when the workspace cwd
+			// is unusable.
+			const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+			const workspacePath = workspaceFolder?.uri.scheme === 'file'
+				? workspaceFolder.uri.fsPath
+				: undefined;
+			const home = homedir();
+			let cwd = workspacePath || home;
+			if (!existsSync(cwd)) {
+				this._log(`  cwd ${cwd} does not exist — falling back to ${home}`);
+				cwd = home;
+			}
+			if (!existsSync(cwd)) {
+				this._log(`  homedir ${home} also does not exist — falling back to /`);
+				cwd = '/';
+			}
 			this._log(`Executing: ${this._redact(command)} (cwd: ${cwd})`);
 
 			const child = spawn(command, {
@@ -552,7 +602,11 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		}
 	}
 
-	private async _openFolder(requestId: string, folderPath: string): Promise<void> {
+	private async _openFolder(
+		requestId: string,
+		folderPath: string,
+		notice?: 'scaffold_complete',
+	): Promise<void> {
 		try {
 			const resolved = resolveFolderPath(folderPath);
 			if ('error' in resolved) {
@@ -568,6 +622,12 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			this._log(`Opening folder: ${resolved.path}`);
 			const uri = vscode.Uri.file(resolved.path);
 			this._sendJson({ type: 'open_folder_result', request_id: requestId, status: 'opened' });
+			// Persist the notice BEFORE the openFolder reload — once that
+			// command runs the current extension host shuts down and any code
+			// after it may not run.
+			if (notice === 'scaffold_complete') {
+				this._onScaffoldComplete?.(resolved.path);
+			}
 			// This reloads the window — the extension will reconnect after.
 			await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: false });
 		} catch (err) {
@@ -577,7 +637,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		}
 	}
 
-	private async _pickFolder(requestId: string, title?: string): Promise<void> {
+	private async _pickFolder(requestId: string, title?: string, returnUrl?: string): Promise<void> {
 		try {
 			this._log(`Folder picker requested: ${title ?? 'Select folder'}`);
 
@@ -592,10 +652,34 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			const path = uris?.[0]?.fsPath ?? null;
 			this._log(path ? `Folder selected: ${path}` : 'Folder picker cancelled');
 			this._sendJson({ type: 'pick_folder_result', request_id: requestId, path });
+
+			// Hand focus back to the dashboard so the user isn't stranded in an
+			// empty VS Code window while the guide continues in the browser.
+			if (returnUrl) {
+				this._refocusBrowser(returnUrl);
+			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this._log(`_pickFolder failed: ${msg}`);
 			this._sendJson({ type: 'pick_folder_result', request_id: requestId, path: null, error: msg });
+			if (returnUrl) {
+				this._refocusBrowser(returnUrl);
+			}
+		}
+	}
+
+	private _refocusBrowser(url: string): void {
+		try {
+			const parsed = vscode.Uri.parse(url, true);
+			if (parsed.scheme !== 'http' && parsed.scheme !== 'https') {
+				this._log(`Refusing to refocus to non-http(s) URL (scheme=${parsed.scheme})`);
+				return;
+			}
+			void vscode.env.openExternal(parsed);
+			this._log(`Refocused browser to: ${url}`);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this._log(`Failed to refocus browser: ${msg}`);
 		}
 	}
 

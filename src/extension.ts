@@ -4,6 +4,16 @@ import { UriEventHandler } from './auth/uriHandler';
 import { MosayicWebSocketClient, type WsState } from './ws/wsClient';
 import { AUTH_TYPE, getApiUrl } from './config';
 
+// Survives a window reload — set just before openFolder, read on next
+// activation to pop the post-scaffold dialog in the new workspace context.
+const SCAFFOLD_NOTICE_KEY = 'mosayic.pendingScaffoldNotice';
+const SCAFFOLD_NOTICE_MAX_AGE_MS = 60_000;
+
+interface PendingScaffoldNotice {
+	path: string;
+	timestamp: number;
+}
+
 export function activate(context: vscode.ExtensionContext) {
 	const uriHandler = new UriEventHandler();
 	context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
@@ -20,8 +30,16 @@ export function activate(context: vscode.ExtensionContext) {
 			const refreshed = await authProvider.refreshSession();
 			return refreshed !== undefined;
 		},
+		(path) => {
+			void context.globalState.update(SCAFFOLD_NOTICE_KEY, {
+				path,
+				timestamp: Date.now(),
+			} satisfies PendingScaffoldNotice);
+		},
 	);
 	context.subscriptions.push(wsClient);
+
+	void showPendingScaffoldNotice(context);
 
 	// Status bar — always visible so the user can see what the extension is doing
 	const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -146,5 +164,37 @@ export function activate(context: vscode.ExtensionContext) {
 			wsClient.resetCommandPrompts();
 			vscode.window.showInformationMessage('Mosayic will prompt again before running non-allowlisted commands.');
 		})
+	);
+
+	// Triggered by the dashboard's "Open VS Code" button via the
+	// vscode://mosayic.vscode-mosayic/wake URI. If signed in, force a fresh
+	// WebSocket connection. Otherwise prompt sign-in (which connects on success).
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-mosayic.connect', async () => {
+			const session = await vscode.authentication.getSession(AUTH_TYPE, [], { createIfNone: false });
+			if (!session) {
+				wsClient.outputChannel.appendLine(`[${stamp()}] [auth] Wake requested but no session — running sign-in.`);
+				await vscode.commands.executeCommand('vscode-mosayic.signIn');
+				return;
+			}
+			await wsClient.forceReconnect();
+		})
+	);
+}
+
+async function showPendingScaffoldNotice(context: vscode.ExtensionContext): Promise<void> {
+	const pending = context.globalState.get<PendingScaffoldNotice>(SCAFFOLD_NOTICE_KEY);
+	if (!pending) { return; }
+	// Always clear — stale entries shouldn't keep popping a dialog.
+	await context.globalState.update(SCAFFOLD_NOTICE_KEY, undefined);
+	if (Date.now() - pending.timestamp > SCAFFOLD_NOTICE_MAX_AGE_MS) { return; }
+	const currentWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	if (currentWorkspace !== pending.path) { return; }
+	void vscode.window.showInformationMessage(
+		'Mosayic has set up your new project folder.',
+		{
+			modal: true,
+			detail: 'VS Code is now in your project. Return to the Mosayic dashboard in your browser to continue setup.',
+		},
 	);
 }
