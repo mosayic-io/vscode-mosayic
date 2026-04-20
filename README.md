@@ -11,7 +11,7 @@ This extension is the bridge between the Mosayic web dashboard and your local ma
 - **Executes commands** sent from the dashboard (`gh`, `firebase`, `gcloud`, `expo`, `supabase`, etc.) inside your current VS Code workspace.
 - **Streams output** back to the dashboard in real time.
 
-You stay in control: every command is shown to you before it runs (configurable), credentials are redacted from logs, and tokens are stored in your OS keychain.
+Your credentials stay yours: tokens are stored in your OS keychain and secrets are redacted from logs.
 
 ## Getting started
 
@@ -34,7 +34,6 @@ You stay in control: every command is shown to you before it runs (configurable)
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `mosayic.apiUrl` | `http://127.0.0.1:8090` | URL of the Mosayic API server. |
 | `mosayic.confirmCommands` | `allowlisted` | When to prompt before running commands: `allowlisted` (auto-approve known Mosayic CLIs), `always`, or `never`. |
 
 ## Security
