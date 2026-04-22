@@ -32,7 +32,7 @@ export type WsState =
 type IncomingMessage =
 	| { type: 'command'; request_id: string; command: string }
 	| { type: 'terminal_command'; request_id: string; command: string; name?: string }
-	| { type: 'pick_folder'; request_id: string; title?: string; return_url?: string }
+	| { type: 'pick_folder'; request_id: string; title?: string }
 	| { type: 'open_folder'; request_id: string; path: string; notice?: 'scaffold_complete' }
 	| { type: 'send_to_terminal'; name: string; text: string }
 	| { type: 'start_dev_server'; request_id: string; session_id: string; command: string; name?: string; path?: string }
@@ -66,7 +66,6 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 					type,
 					request_id: m.request_id,
 					title: isString(m.title) ? m.title : undefined,
-					return_url: isString(m.return_url) ? m.return_url : undefined,
 				};
 			}
 			return undefined;
@@ -218,7 +217,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		this._handlers = {
 			command: (m) => void this._executeCommand(m.request_id, m.command),
 			terminal_command: (m) => void this._runInTerminal(m.request_id, m.command, m.name),
-			pick_folder: (m) => void this._pickFolder(m.request_id, m.title, m.return_url),
+			pick_folder: (m) => void this._pickFolder(m.request_id, m.title),
 			open_folder: (m) => void this._openFolder(m.request_id, m.path, m.notice),
 			send_to_terminal: (m) => this._sendToTerminal(m.name, m.text),
 			start_dev_server: (m) => this._startDevServer(m.request_id, m.session_id, m.command, m.name, m.path),
@@ -340,6 +339,13 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			this._logConn(`Connected to ${apiUrl}/ws`);
 			this._reconnectAttempt = 0;
 			this._startPing();
+			// Announce host OS to the backend so platform-dependent flows
+			// (e.g. Supabase setup) can branch without a probe round-trip.
+			this._sendJson({
+				type: 'hello',
+				platform: process.platform,
+				arch: process.arch,
+			});
 			this._setState('connected', apiUrl);
 		});
 
@@ -516,8 +522,13 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			}
 			this._log(`Executing: ${this._redact(command)} (cwd: ${cwd})`);
 
+			// On Windows, the default shell is cmd.exe — but the backend composes
+			// bash-syntax command strings (``$HOME``, ``. nvm.sh``, heredoc-style
+			// quoting, etc.) for all platforms. Use git-bash on Windows so the
+			// same commands work identically across macOS, Linux, and Windows.
+			const shell: string | true = process.platform === 'win32' ? 'bash' : true;
 			const child = spawn(command, {
-				shell: true,
+				shell,
 				cwd,
 				timeout: COMMAND_TIMEOUT_MS,
 			});
@@ -667,7 +678,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		}
 	}
 
-	private async _pickFolder(requestId: string, title?: string, returnUrl?: string): Promise<void> {
+	private async _pickFolder(requestId: string, title?: string): Promise<void> {
 		try {
 			this._log(`Folder picker requested: ${title ?? 'Select folder'}`);
 
@@ -683,33 +694,15 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			this._log(path ? `Folder selected: ${path}` : 'Folder picker cancelled');
 			this._sendJson({ type: 'pick_folder_result', request_id: requestId, path });
 
-			// Hand focus back to the dashboard so the user isn't stranded in an
-			// empty VS Code window while the guide continues in the browser.
-			if (returnUrl) {
-				this._refocusBrowser(returnUrl);
+			if (path) {
+				void vscode.window.showInformationMessage(
+					'Folder selected. Switch back to Mosayic in your browser to continue.',
+				);
 			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this._log(`_pickFolder failed: ${msg}`);
 			this._sendJson({ type: 'pick_folder_result', request_id: requestId, path: null, error: msg });
-			if (returnUrl) {
-				this._refocusBrowser(returnUrl);
-			}
-		}
-	}
-
-	private _refocusBrowser(url: string): void {
-		try {
-			const parsed = vscode.Uri.parse(url, true);
-			if (parsed.scheme !== 'http' && parsed.scheme !== 'https') {
-				this._log(`Refusing to refocus to non-http(s) URL (scheme=${parsed.scheme})`);
-				return;
-			}
-			void vscode.env.openExternal(parsed);
-			this._log(`Refocused browser to: ${url}`);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			this._log(`Failed to refocus browser: ${msg}`);
 		}
 	}
 

@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.8] - 2026-04-22
+
+### Changed
+- `pick_folder` no longer calls `vscode.env.openExternal` to refocus the dashboard. After the user selects a folder, the extension shows a VS Code information message prompting them to switch windows. Removes the OS-level "allow this page to open VS Code / browser?" prompts and the stray dashboard tabs `openExternal` used to spawn. The `return_url` field on `pick_folder` messages is no longer read (see `mosayic-api/docs/ws-protocol.md`).
+
 ## [0.0.7] - 2026-04-20
 
 ### Added
