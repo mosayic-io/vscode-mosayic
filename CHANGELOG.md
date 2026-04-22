@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.11] - 2026-04-22
+
+### Fixed
+- `isShellAbuseCommand` now ignores characters inside single-quoted regions, matching POSIX shell semantics: inside `'…'` shell interprets nothing, so a `;`, `$(`, or backtick there is not a real separator/substitution. Without this, the Supabase setup flow's LAN-IP and `.env`-patch probes — `. "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 && node -e '…;…;…'`, where the JS payload is shlex-quoted — were tripping the abuse filter on `;` inside the Node `-e` string, falling out of the allowlist, and hanging on an unseen consent prompt. Double-quoted content is left intact on purpose so shell-level `$()` / backtick substitution is still caught.
+
 ## [0.0.10] - 2026-04-22
 
 ### Changed

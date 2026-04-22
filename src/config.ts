@@ -104,8 +104,37 @@ const SHELL_ABUSE_PATTERNS: RegExp[] = [
 	/\r|\n/,       // embedded newline — injects another command line
 ];
 
+/**
+ * Strip content inside single-quoted regions from a shell command string.
+ * Inside `'…'` POSIX shell interprets nothing — no substitution, no escapes,
+ * no metacharacters — so a `;`, `$(`, or backtick that appears there is not
+ * a real separator / substitution and shouldn't trip the abuse filter.
+ *
+ * Double-quoted content is left intact on purpose: shell DOES interpret
+ * `$()` and backticks inside `"…"`, so the filter must still see them.
+ * The concrete payload this exists for is `node -e '<js>'` probes whose
+ * bodies are shlex-quoted by the backend (e.g. supabase_setup's LAN-IP
+ * and .env-patch steps) — those contain `;` in the JS source.
+ */
+function stripSingleQuoted(command: string): string {
+	let out = '';
+	let i = 0;
+	while (i < command.length) {
+		if (command[i] === "'") {
+			i++;
+			while (i < command.length && command[i] !== "'") { i++; }
+			if (i < command.length) { i++; } // skip closing quote
+			continue;
+		}
+		out += command[i];
+		i++;
+	}
+	return out;
+}
+
 export function isShellAbuseCommand(command: string): boolean {
-	return SHELL_ABUSE_PATTERNS.some(re => re.test(command));
+	const stripped = stripSingleQuoted(command);
+	return SHELL_ABUSE_PATTERNS.some(re => re.test(stripped));
 }
 
 function firstToken(command: string): string {
