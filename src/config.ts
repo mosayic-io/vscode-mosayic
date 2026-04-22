@@ -81,6 +81,10 @@ const ALLOWED_FIRST_TOKENS = new Set<string>([
 	// and reclaim dev-server ports (`lsof -ti:8081 | xargs kill -9`).
 	'hostname',
 	'lsof',
+	// POSIX `source` builtin — the Supabase setup flow prefixes every
+	// Node/nvm call on macOS/Linux with `. "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
+	// && …` so `node` resolves under the user's nvm-selected version.
+	'.',
 ]);
 
 /**
