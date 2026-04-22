@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.9] - 2026-04-22
+
+### Changed
+- Command allowlist updated to match the current backend probe set: added `test`, `[`, `nvm`, `docker`, `hostname`, and `lsof`; removed `firebase`. Previously, the Supabase setup flow's nvm probe (`test -s "$HOME/.nvm/nvm.sh"`) was not allowlisted, so the extension raised a consent prompt that the user — looking at the browser dashboard — never saw. The backend's 15-second `nvm_check` step then timed out with `nvm_check_timeout`. With `test` allowlisted, the probe auto-approves and the setup flow proceeds.
+
 ## [0.0.8] - 2026-04-22
 
 ### Changed
