@@ -104,7 +104,7 @@
             "never"
           ],
           "enumDescriptions": [
-            "Auto-approve known Mosayic commands (gh, firebase, gcloud, expo, supabase, etc.). Prompt for anything else.",
+            "Auto-approve known Mosayic commands (gh, gcloud, expo, supabase, etc.). Prompt for anything else.",
             "Prompt before every command.",
             "Never prompt. Trust all commands from the Mosayic server."
           ],

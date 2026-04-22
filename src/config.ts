@@ -50,7 +50,6 @@ export function getConfirmMode(): ConfirmMode {
  */
 const ALLOWED_FIRST_TOKENS = new Set<string>([
 	'gh',
-	'firebase',
 	'gcloud',
 	'expo',
 	'eas',
@@ -58,6 +57,10 @@ const ALLOWED_FIRST_TOKENS = new Set<string>([
 	'npm',
 	'npx',
 	'node',
+	// Windows-only: nvm-for-windows ships a real `nvm` binary. On macOS/Linux
+	// nvm is a shell function and never appears as a first token.
+	'nvm',
+	'docker',
 	'mkdir',
 	'git',
 	'unzip',
@@ -69,6 +72,15 @@ const ALLOWED_FIRST_TOKENS = new Set<string>([
 	'cd',
 	'printf',
 	'uv',
+	// POSIX file/string tests used by install-probes (e.g. nvm detection) and
+	// conditional scaffold steps. Both forms accept the same predicates; the
+	// bracket form is a shell builtin in practice.
+	'test',
+	'[',
+	// Preview flow uses these to discover the LAN IP (`hostname -I | awk ...`)
+	// and reclaim dev-server ports (`lsof -ti:8081 | xargs kill -9`).
+	'hostname',
+	'lsof',
 ]);
 
 /**

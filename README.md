@@ -8,7 +8,7 @@ This extension is the bridge between the Mosayic web dashboard and your local ma
 
 - **Signs you in** to Mosayic using your Google account, via a secure OAuth flow.
 - **Connects to the Mosayic backend** over a persistent WebSocket.
-- **Executes commands** sent from the dashboard (`gh`, `firebase`, `gcloud`, `expo`, `supabase`, etc.) inside your current VS Code workspace.
+- **Executes commands** sent from the dashboard (`gh`, `gcloud`, `expo`, `supabase`, etc.) inside your current VS Code workspace.
 - **Streams output** back to the dashboard in real time.
 
 Your credentials stay yours: tokens are stored in your OS keychain and secrets are redacted from logs.
