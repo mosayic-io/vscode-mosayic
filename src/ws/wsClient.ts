@@ -9,6 +9,7 @@ import {
 	getConfirmMode,
 	isAllowlistedCommand,
 } from '../config';
+import { resolveCommandShell } from '../shell';
 import { TerminalRegistry } from './managedTerminal';
 
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
@@ -522,11 +523,13 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			}
 			this._log(`Executing: ${this._redact(command)} (cwd: ${cwd})`);
 
-			// On Windows, the default shell is cmd.exe — but the backend composes
-			// bash-syntax command strings (``$HOME``, ``. nvm.sh``, heredoc-style
-			// quoting, etc.) for all platforms. Use git-bash on Windows so the
-			// same commands work identically across macOS, Linux, and Windows.
-			const shell: string | true = process.platform === 'win32' ? 'bash' : true;
+			// Pick a shell per-platform. On Windows, a bare ``"bash"`` here would
+			// get PATH-resolved to ``C:\Windows\System32\bash.exe`` (the WSL
+			// distro launcher) on any box with WSL enabled, and every Mosayic
+			// command would run inside the user's Ubuntu instead of Windows.
+			// resolveCommandShell() defaults to cmd.exe on Windows (PATHEXT
+			// covers .exe/.cmd/.ps1), with opt-in Git Bash / PowerShell 7.
+			const shell = resolveCommandShell();
 			const child = spawn(command, {
 				shell,
 				cwd,

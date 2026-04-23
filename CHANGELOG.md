@@ -4,6 +4,16 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.12] - 2026-04-23
+
+### Added
+- `mosayic.windowsShell` setting (`auto` | `cmd` | `gitbash` | `pwsh`, default `auto`). Picks the shell used by `child_process.spawn` for Mosayic commands on Windows. `gitbash` / `pwsh` resolve to known absolute install paths, never via a PATH lookup.
+- `Mosayic: Check Docker` command, plus a fire-and-forget Docker preflight that runs on activation. Classifies Docker as `ok` / `not-installed` / `daemon-down` / `unknown` from a 3s `docker info` probe. Surfaces a warning notification at most once per session with `Install Docker Desktop` (opens docker.com) and `Re-check` actions. Does not attempt to install Docker — the install is UAC/EULA/WSL2-gated and can't be reliably automated.
+
+### Fixed
+- Shell selection on Windows no longer passes the bare string `"bash"` to `spawn`. On machines with the WSL optional feature enabled, `C:\Windows\System32\bash.exe` is the WSL distro launcher, not a POSIX bash — every Mosayic command was running inside the user's Ubuntu distro, where none of their Windows-installed CLI tools (gh.exe, npm.cmd, supabase.exe, docker.exe, …) existed. The new resolver defaults to cmd.exe (PATHEXT covers `.exe`/`.cmd`/`.ps1`, which is every CLI the backend invokes) and only uses Git Bash / PowerShell when explicitly selected — and then only from hard-coded install paths.
+- The managed-terminal pty (dev servers, `npm run start`, etc.) now routes through the same shell resolver, so the `windowsShell` setting applies uniformly to background commands and visible terminals.
+
 ## [0.0.11] - 2026-04-22
 
 ### Fixed

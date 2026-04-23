@@ -11,6 +11,7 @@ import {
 	setEnvironment,
 	type Environment,
 } from './config';
+import { runDockerPreflight } from './docker';
 
 // Survives a window reload — set just before openFolder, read on next
 // activation to pop the post-scaffold dialog in the new workspace context.
@@ -282,6 +283,17 @@ export function activate(context: vscode.ExtensionContext) {
 			wsClient.focusLastTerminal();
 		})
 	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-mosayic.checkDocker', () => {
+			void runDockerPreflight(wsClient.outputChannel, { manual: true });
+		})
+	);
+
+	// Fire-and-forget: don't block activation on the Docker probe. A passive
+	// warning is surfaced at most once per session if Docker is missing /
+	// stopped; the command above lets users re-check explicitly.
+	void runDockerPreflight(wsClient.outputChannel);
 }
 
 async function showPendingScaffoldNotice(context: vscode.ExtensionContext): Promise<void> {

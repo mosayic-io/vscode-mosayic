@@ -2,7 +2,7 @@
   "name": "vscode-mosayic",
   "displayName": "Mosayic",
   "description": "Mosayic VS Code Extension",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "publisher": "mosayic",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -62,6 +62,10 @@
       {
         "command": "vscode-mosayic.switchBackend",
         "title": "Mosayic: Switch Backend\u2026"
+      },
+      {
+        "command": "vscode-mosayic.checkDocker",
+        "title": "Mosayic: Check Docker"
       }
     ],
     "menus": {
@@ -114,6 +118,23 @@
           "type": "boolean",
           "default": false,
           "description": "Show developer-only commands (e.g. \"Mosayic: Switch Backend\u2026\") in the command palette. For Mosayic contributors."
+        },
+        "mosayic.windowsShell": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "cmd",
+            "gitbash",
+            "pwsh"
+          ],
+          "enumDescriptions": [
+            "Use cmd.exe (recommended \u2014 works with all Windows CLI tools and avoids the WSL launcher).",
+            "Use cmd.exe.",
+            "Use Git Bash from a known install path (never from PATH, which can resolve to the WSL launcher).",
+            "Use PowerShell 7 if installed, otherwise Windows PowerShell."
+          ],
+          "description": "Shell used to run commands on Windows. Ignored on macOS/Linux."
         }
       }
     }
