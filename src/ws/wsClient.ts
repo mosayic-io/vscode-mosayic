@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
-import { existsSync, realpathSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
+import { dirname, resolve as pathResolve } from 'path';
 import { WebSocket } from 'ws';
 import {
 	getApiUrl,
@@ -39,7 +40,9 @@ type IncomingMessage =
 	| { type: 'start_dev_server'; request_id: string; session_id: string; command: string; name?: string; path?: string }
 	| { type: 'stop_dev_server'; request_id: string; session_id: string }
 	| { type: 'terminal_input'; session_id: string; text: string }
-	| { type: 'dev_server_status'; request_id: string; session_id: string };
+	| { type: 'dev_server_status'; request_id: string; session_id: string }
+	| { type: 'write_file'; request_id: string; path: string; data: string }
+	| { type: 'read_file'; request_id: string; path: string };
 
 function isString(v: unknown): v is string {
 	return typeof v === 'string' && v.length > 0;
@@ -108,6 +111,16 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 				return { type, request_id: m.request_id, session_id: m.session_id };
 			}
 			return undefined;
+		case 'write_file':
+			if (isString(m.request_id) && isString(m.path) && isString(m.data)) {
+				return { type, request_id: m.request_id, path: m.path, data: m.data };
+			}
+			return undefined;
+		case 'read_file':
+			if (isString(m.request_id) && isString(m.path)) {
+				return { type, request_id: m.request_id, path: m.path };
+			}
+			return undefined;
 		default:
 			return undefined;
 	}
@@ -154,6 +167,108 @@ function resolveFolderPath(folderPath: string): { path: string } | { error: stri
 			allowedRoots.push(realpathSync(workspace));
 		} catch {
 			// ignore — if the workspace root is unreadable, we still have home
+		}
+	}
+	const withSep = (p: string) => (p.endsWith('/') ? p : p + '/');
+	const underAllowed = allowedRoots.some(root => real === root || real.startsWith(withSep(root)));
+	if (!underAllowed) {
+		return { error: 'Path is outside allowed directories (must be under $HOME or workspace root)' };
+	}
+	return { path: real };
+}
+
+/**
+ * Validate a file path the backend wants us to WRITE to. The file itself need
+ * not exist yet, but its real, existing nearest ancestor must live under $HOME
+ * or the workspace root. The returned path is composed of the resolved
+ * ancestor + the still-virtual tail, so symlink games above the leaf can't
+ * escape the allowlist.
+ */
+function resolveFileWritePath(filePath: string): { path: string } | { error: string } {
+	if (!filePath || filePath.includes('\0')) {
+		return { error: 'Empty or malformed path' };
+	}
+	const absolute = pathResolve(filePath);
+	let existing = absolute;
+	while (!existsSync(existing)) {
+		const parent = dirname(existing);
+		if (parent === existing) {
+			return { error: 'No existing ancestor directory found' };
+		}
+		existing = parent;
+	}
+	let realExisting: string;
+	try {
+		realExisting = realpathSync(existing);
+	} catch (e) {
+		return { error: `Cannot resolve path: ${e instanceof Error ? e.message : String(e)}` };
+	}
+	if (existsSync(absolute)) {
+		let stat;
+		try {
+			stat = statSync(absolute);
+		} catch (e) {
+			return { error: `Cannot stat path: ${e instanceof Error ? e.message : String(e)}` };
+		}
+		if (!stat.isFile()) {
+			return { error: 'Target path exists and is not a regular file' };
+		}
+	}
+	const home = realpathSync(homedir());
+	const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	const allowedRoots = [home];
+	if (workspace) {
+		try {
+			allowedRoots.push(realpathSync(workspace));
+		} catch {
+			// ignore
+		}
+	}
+	const withSep = (p: string) => (p.endsWith('/') ? p : p + '/');
+	const underAllowed = allowedRoots.some(root => realExisting === root || realExisting.startsWith(withSep(root)));
+	if (!underAllowed) {
+		return { error: 'Path is outside allowed directories (must be under $HOME or workspace root)' };
+	}
+	const tail = absolute.slice(existing.length);
+	return { path: realExisting + tail };
+}
+
+/**
+ * Validate a file path the backend wants us to READ. The file must already
+ * exist, be a regular file, and resolve under $HOME or the workspace root.
+ * Returns ``code: 'not_found'`` for the missing-file case so callers can
+ * distinguish it from a permission denial.
+ */
+function resolveFileReadPath(filePath: string): { path: string } | { error: string; code?: 'not_found' } {
+	if (!filePath || filePath.includes('\0')) {
+		return { error: 'Empty or malformed path' };
+	}
+	if (!existsSync(filePath)) {
+		return { error: 'File does not exist', code: 'not_found' };
+	}
+	let real: string;
+	try {
+		real = realpathSync(filePath);
+	} catch (e) {
+		return { error: `Cannot resolve path: ${e instanceof Error ? e.message : String(e)}` };
+	}
+	let stat;
+	try {
+		stat = statSync(real);
+	} catch (e) {
+		return { error: `Cannot stat path: ${e instanceof Error ? e.message : String(e)}` };
+	}
+	if (!stat.isFile()) {
+		return { error: 'Path is not a regular file' };
+	}
+	const home = realpathSync(homedir());
+	const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	const allowedRoots = [home];
+	if (workspace) {
+		try {
+			allowedRoots.push(realpathSync(workspace));
+		} catch {
+			// ignore
 		}
 	}
 	const withSep = (p: string) => (p.endsWith('/') ? p : p + '/');
@@ -225,6 +340,8 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			stop_dev_server: (m) => this._stopDevServer(m.request_id, m.session_id),
 			terminal_input: (m) => this._terminalInput(m.session_id, m.text),
 			dev_server_status: (m) => this._devServerStatus(m.request_id, m.session_id),
+			write_file: (m) => this._writeFile(m.request_id, m.path, m.data),
+			read_file: (m) => this._readFile(m.request_id, m.path),
 		};
 	}
 
@@ -663,17 +780,20 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				});
 				return;
 			}
-			this._log(`Opening folder: ${resolved.path}`);
+			// For scaffold completion we open a NEW window so any running dev
+			// servers / terminals in the current window stay alive. For other
+			// open_folder calls we still replace the current workspace.
+			const newWindow = notice === 'scaffold_complete';
+			this._log(`Opening folder: ${resolved.path} (newWindow=${newWindow})`);
 			const uri = vscode.Uri.file(resolved.path);
 			this._sendJson({ type: 'open_folder_result', request_id: requestId, status: 'opened' });
-			// Persist the notice BEFORE the openFolder reload — once that
-			// command runs the current extension host shuts down and any code
-			// after it may not run.
+			// Persist the notice BEFORE the openFolder call — globalState is
+			// shared across windows, so the new (or reloaded) window's
+			// activation reads it and pops the post-scaffold dialog.
 			if (notice === 'scaffold_complete') {
 				this._onScaffoldComplete?.(resolved.path);
 			}
-			// This reloads the window — the extension will reconnect after.
-			await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: false });
+			await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: newWindow });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this._log(`_openFolder failed: ${msg}`);
@@ -770,6 +890,60 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	private _devServerStatus(requestId: string, sessionId: string): void {
 		const running = this._terminalRegistry.has(sessionId);
 		this._sendJson({ type: 'dev_server_status_result', request_id: requestId, session_id: sessionId, running });
+	}
+
+	private _writeFile(requestId: string, filePath: string, dataB64: string): void {
+		try {
+			const resolved = resolveFileWritePath(filePath);
+			if ('error' in resolved) {
+				this._log(`DENIED write_file "${filePath}": ${resolved.error}`);
+				this._sendJson({
+					type: 'write_file_result',
+					request_id: requestId,
+					status: 'denied',
+					error: resolved.error,
+				});
+				return;
+			}
+			const bytes = Buffer.from(dataB64, 'base64');
+			// mkdir -p the parent in case the user is dropping a logo into a
+			// fresh project where /assets doesn't exist yet.
+			mkdirSync(dirname(resolved.path), { recursive: true });
+			writeFileSync(resolved.path, bytes);
+			this._log(`Wrote ${bytes.length} bytes to ${resolved.path}`);
+			this._sendJson({ type: 'write_file_result', request_id: requestId, status: 'ok' });
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this._log(`_writeFile failed: ${msg}`);
+			this._sendJson({ type: 'write_file_result', request_id: requestId, status: 'error', error: msg });
+		}
+	}
+
+	private _readFile(requestId: string, filePath: string): void {
+		try {
+			const resolved = resolveFileReadPath(filePath);
+			if ('error' in resolved) {
+				const code = 'code' in resolved ? resolved.code : undefined;
+				this._log(`read_file "${filePath}": ${resolved.error}`);
+				this._sendJson({
+					type: 'read_file_result',
+					request_id: requestId,
+					error: code === 'not_found' ? 'not_found' : resolved.error,
+				});
+				return;
+			}
+			const buf = readFileSync(resolved.path);
+			this._log(`Read ${buf.length} bytes from ${resolved.path}`);
+			this._sendJson({
+				type: 'read_file_result',
+				request_id: requestId,
+				data: buf.toString('base64'),
+			});
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this._log(`_readFile failed: ${msg}`);
+			this._sendJson({ type: 'read_file_result', request_id: requestId, error: msg });
+		}
 	}
 
 	private _sendJson(data: Record<string, unknown>): void {
