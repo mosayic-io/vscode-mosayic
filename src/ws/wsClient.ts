@@ -780,20 +780,19 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				});
 				return;
 			}
-			// For scaffold completion we open a NEW window so any running dev
-			// servers / terminals in the current window stay alive. For other
-			// open_folder calls we still replace the current workspace.
-			const newWindow = notice === 'scaffold_complete';
-			this._log(`Opening folder: ${resolved.path} (newWindow=${newWindow})`);
+			// Always reuse the current window. Two open windows means two
+			// extension instances racing on the same WebSocket route, so the
+			// backend can't tell which one should run a given command.
+			this._log(`Opening folder: ${resolved.path}`);
 			const uri = vscode.Uri.file(resolved.path);
 			this._sendJson({ type: 'open_folder_result', request_id: requestId, status: 'opened' });
-			// Persist the notice BEFORE the openFolder call — globalState is
-			// shared across windows, so the new (or reloaded) window's
-			// activation reads it and pops the post-scaffold dialog.
+			// Persist the notice BEFORE the openFolder call — globalState
+			// survives the workspace reload, so the reactivated extension
+			// reads it and pops the post-scaffold dialog.
 			if (notice === 'scaffold_complete') {
 				this._onScaffoldComplete?.(resolved.path);
 			}
-			await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: newWindow });
+			await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: false });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this._log(`_openFolder failed: ${msg}`);
