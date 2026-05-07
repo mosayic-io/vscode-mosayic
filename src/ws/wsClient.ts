@@ -15,6 +15,10 @@ import { TerminalRegistry } from './managedTerminal';
 
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const PING_INTERVAL = 30000;
+// If we don't receive a pong within this window, treat the connection as dead
+// and force a reconnect. 75s = 2.5 ping intervals — slow networks get slack
+// without leaving the user staring at a stale "Connected" status for minutes.
+const PONG_TIMEOUT = 75000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024; // 10 MB
 const COMMAND_TIMEOUT_MS = 600_000;
@@ -42,7 +46,8 @@ type IncomingMessage =
 	| { type: 'terminal_input'; session_id: string; text: string }
 	| { type: 'dev_server_status'; request_id: string; session_id: string }
 	| { type: 'write_file'; request_id: string; path: string; data: string }
-	| { type: 'read_file'; request_id: string; path: string };
+	| { type: 'read_file'; request_id: string; path: string }
+	| { type: 'pong' };
 
 function isString(v: unknown): v is string {
 	return typeof v === 'string' && v.length > 0;
@@ -121,6 +126,8 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 				return { type, request_id: m.request_id, path: m.path };
 			}
 			return undefined;
+		case 'pong':
+			return { type };
 		default:
 			return undefined;
 	}
@@ -285,6 +292,11 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	private _reconnectAttempt = 0;
 	private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	private _pingTimer: ReturnType<typeof setInterval> | undefined;
+	// Timestamp of the most recent pong from the backend. Used as a liveness
+	// check — if pongs stop arriving while the socket still looks open, the
+	// connection has silently died (Cloud Run idle reaper, network blip, etc.)
+	// and we force a reconnect.
+	private _lastPongAt = 0;
 	private _getToken: () => Promise<string | undefined>;
 	private _refreshToken: (() => Promise<boolean>) | undefined;
 	private _outputChannel: vscode.OutputChannel;
@@ -342,6 +354,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			dev_server_status: (m) => this._devServerStatus(m.request_id, m.session_id),
 			write_file: (m) => this._writeFile(m.request_id, m.path, m.data),
 			read_file: (m) => this._readFile(m.request_id, m.path),
+			pong: () => { this._lastPongAt = Date.now(); },
 		};
 	}
 
@@ -975,10 +988,25 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 
 	private _startPing(): void {
 		this._stopPing();
+		// Seed the liveness timestamp so the first interval tick doesn't
+		// immediately classify the connection as dead.
+		this._lastPongAt = Date.now();
 		this._pingTimer = setInterval(() => {
-			if (this._ws?.readyState === WebSocket.OPEN) {
-				this._ws.send(JSON.stringify({ type: 'ping' }));
+			if (this._ws?.readyState !== WebSocket.OPEN) { return; }
+
+			const sincePong = Date.now() - this._lastPongAt;
+			if (sincePong > PONG_TIMEOUT) {
+				this._logConn(
+					`No pong in ${Math.round(sincePong / 1000)}s — `
+					+ 'connection appears dead, forcing reconnect.',
+				);
+				// terminate() forces the socket closed; the 'close' handler
+				// then schedules the reconnect via the existing path.
+				this._ws.terminate();
+				return;
 			}
+
+			this._ws.send(JSON.stringify({ type: 'ping' }));
 		}, PING_INTERVAL);
 	}
 
