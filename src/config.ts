@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 export const AUTH_TYPE = 'mosayic';
 export const AUTH_NAME = 'Mosayic';
 
-export const PROD_API_URL = 'https://mosayic-api-service-336793731775.us-east1.run.app';
+export const PROD_API_URL = 'https://mosayic-api.fly.dev';
 export const DEV_API_URL = 'http://127.0.0.1:8090';
 
 export type Environment = 'prod' | 'dev' | 'custom';
