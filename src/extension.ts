@@ -269,6 +269,10 @@ export function activate(context: vscode.ExtensionContext) {
 				await vscode.commands.executeCommand('vscode-mosayic.signIn');
 				return;
 			}
+			if (wsClient.state === 'connected') {
+				wsClient.outputChannel.appendLine(`[${stamp()}] [conn] Wake received — already connected, ignoring.`);
+				return;
+			}
 			await wsClient.forceReconnect();
 		})
 	);
