@@ -1,5 +1,17 @@
 # Mosayic VS Code Extension (vscode-mosayic)
 
+## ⛔ HARD RULE: production data is untouchable
+
+**NEVER add, update, or remove production data in Supabase.** No INSERT /
+UPDATE / DELETE / UPSERT / TRUNCATE against the production database by any
+route — SQL editor, `supabase` CLI, `psql`, PostgREST / service-role key,
+admin endpoints, one-off scripts, anything.
+
+Allowed: running releases (including the migrations workflow — schema changes
+ride releases) and **read-only** production checks (statuses, logs,
+dashboards, SELECTs). If a task seems to require touching prod data, stop and
+ask John — do not do it as a side effect of something else.
+
 ## What is Mosayic
 
 Mosayic is a SaaS platform for guided mobile app development. This repo is the **VS Code extension** — the execution bridge between the Mosayic web dashboard and the user's local machine. It receives commands from the backend via WebSocket, executes them as local shell processes, and streams output back.
