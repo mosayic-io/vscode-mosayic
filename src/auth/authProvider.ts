@@ -13,6 +13,13 @@ interface TokenData {
 	email: string;
 }
 
+// Must stay in step with the backend's _ALLOWED_PROVIDERS
+// (mosayic-api, app/routes/vscode_auth_router.py).
+const SIGN_IN_PROVIDERS: Array<vscode.QuickPickItem & { id: string }> = [
+	{ id: 'google', label: 'Google' },
+	{ id: 'github', label: 'GitHub' },
+];
+
 export class MosayicAuthenticationProvider implements vscode.AuthenticationProvider, vscode.Disposable {
 	private _sessionChangeEmitter = new vscode.EventEmitter<vscode.AuthenticationProviderAuthenticationSessionsChangeEvent>();
 	private _disposables: vscode.Disposable[] = [];
@@ -132,6 +139,14 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 	}
 
 	private async _login(): Promise<TokenData> {
+		const provider = await vscode.window.showQuickPick(SIGN_IN_PROVIDERS, {
+			placeHolder: 'How would you like to sign in to Mosayic?',
+			ignoreFocusOut: true,
+		});
+		if (!provider) {
+			throw new Error('Login cancelled');
+		}
+
 		return vscode.window.withProgress<TokenData>(
 			{
 				location: vscode.ProgressLocation.Notification,
@@ -146,7 +161,7 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 					vscode.Uri.parse(`${vscode.env.uriScheme}://mosayic.vscode-mosayic/auth-callback`)
 				);
 
-				const loginUrl = `${apiUrl}/auth/vscode/login?nonce=${nonce}&callback_uri=${encodeURIComponent(callbackUri.toString())}`;
+				const loginUrl = `${apiUrl}/auth/vscode/login?nonce=${nonce}&provider=${provider.id}&callback_uri=${encodeURIComponent(callbackUri.toString())}`;
 
 				const tokenPromise = this._waitForCallback(nonce, cancellationToken);
 

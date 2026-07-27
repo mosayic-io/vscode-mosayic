@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-27
+
+### Added
+- Sign-in provider picker: "Sign in to Mosayic" now opens a QuickPick (Google / GitHub) before launching the browser, passed to the backend as the `provider` param on `/auth/vscode/login`. Requires mosayic-api ≥ 0.10.0 for GitHub; older backends ignore nothing — the param simply wasn't sent before, and Google remains the default.
+
 ## [0.0.12] - 2026-04-23
 
 ### Added

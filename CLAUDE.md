@@ -53,12 +53,12 @@ vscode-mosayic/
 
 ## Authentication
 
-**Provider**: Custom OAuth2 via Mosayic backend + Supabase + Google.
+**Provider**: Custom OAuth2 via Mosayic backend + Supabase (Google / GitHub — chosen in a QuickPick at sign-in).
 
 **Login flow** (`src/auth/authProvider.ts`):
 1. Extension generates a random nonce
 2. Requests login URL from `GET {apiUrl}/auth/vscode/login?nonce=...&callback_uri=...`
-3. Opens external browser for Google OAuth
+3. Opens external browser for OAuth with the chosen provider (`provider` query param)
 4. Backend completes PKCE flow, redirects to `vscode://mosayic.vscode-mosayic/auth-callback`
 5. Extension receives tokens (access, refresh) + user info via URI query params
 6. Tokens stored in VS Code's `secretStorage` (OS-level credential manager)
