@@ -14,41 +14,50 @@ function getWindowsShellPreference(): WindowsShellPreference {
 }
 
 /**
+ * Locate Git Bash at its known install paths. Never falls back to a PATH
+ * lookup for "bash": on a machine with the "Windows Subsystem for Linux"
+ * optional feature enabled, ``C:\Windows\System32\bash.exe`` is the WSL
+ * distro launcher — not a POSIX bash. Commands would then run inside the
+ * user's Ubuntu distro, where none of their Windows-installed CLI tools
+ * (gh.exe, npm.cmd, supabase.exe, ...) exist.
+ */
+function findGitBash(): string | null {
+	const envOverride = process.env.MOSAYIC_GIT_BASH;
+	const candidates = [
+		envOverride,
+		'C:\\Program Files\\Git\\bin\\bash.exe',
+		'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+		'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+	].filter((c): c is string => typeof c === 'string' && c.length > 0);
+	for (const c of candidates) {
+		if (existsSync(c)) { return c; }
+	}
+	return null;
+}
+
+/**
  * Pick the shell to hand to Node's ``child_process.spawn({ shell })`` on the
  * current platform.
  *
  * On macOS/Linux we return ``true`` (spawn picks ``/bin/sh``).
  *
- * On Windows we never return the bare string ``"bash"`` or ``"pwsh"``: Node
- * resolves those via a PATH lookup, and on a machine with the "Windows
- * Subsystem for Linux" optional feature enabled, ``C:\Windows\System32\bash.exe``
- * is the WSL distro launcher — not a POSIX bash. Commands would then run
- * inside the user's Ubuntu distro, where none of their Windows-installed CLI
- * tools (gh.exe, npm.cmd, supabase.exe, ...) exist. Instead we resolve
- * Git Bash / PowerShell to known absolute install paths and fall back to
- * cmd.exe (``true``, which honours ``%ComSpec%``). cmd resolves .exe/.cmd/.ps1
- * via PATHEXT, which covers every CLI the Mosayic backend invokes.
+ * On Windows, ``auto`` prefers Git Bash: the commands the Mosayic backend
+ * relays are POSIX one-liners (`&&` chains, `$(...)`, `[ -f ... ]`,
+ * `mkdir -p`), which cmd.exe cannot parse — and the course has every Windows
+ * student install Git Bash before they reach any Mosayic-driven step. Only
+ * when Git Bash genuinely isn't installed do we fall back to cmd.exe
+ * (``true``, which honours ``%ComSpec%``). PowerShell resolves to known
+ * absolute install paths for the same WSL-trap reason as Git Bash.
  */
 export function resolveCommandShell(): string | boolean {
 	if (process.platform !== 'win32') { return true; }
 
 	const pref = getWindowsShellPreference();
 
-	if (pref === 'cmd' || pref === 'auto') { return true; }
+	if (pref === 'cmd') { return true; }
 
-	if (pref === 'gitbash') {
-		const envOverride = process.env.MOSAYIC_GIT_BASH;
-		const candidates = [
-			envOverride,
-			'C:\\Program Files\\Git\\bin\\bash.exe',
-			'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
-			'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
-		].filter((c): c is string => typeof c === 'string' && c.length > 0);
-		for (const c of candidates) {
-			if (existsSync(c)) { return c; }
-		}
-		// Never fall back to a PATH lookup for "bash" — that's the WSL trap.
-		return true;
+	if (pref === 'auto' || pref === 'gitbash') {
+		return findGitBash() ?? true;
 	}
 
 	if (pref === 'pwsh') {

@@ -2,7 +2,7 @@
   "name": "vscode-mosayic",
   "displayName": "Mosayic",
   "description": "Mosayic VS Code Extension",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "mosayic",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -129,8 +129,8 @@
             "pwsh"
           ],
           "enumDescriptions": [
-            "Use cmd.exe (recommended — works with all Windows CLI tools and avoids the WSL launcher).",
-            "Use cmd.exe.",
+            "Use Git Bash when installed (recommended — Mosayic's setup commands need a POSIX shell), otherwise cmd.exe.",
+            "Use cmd.exe. Mosayic's automated setup steps (e.g. project scaffolding) will not work.",
             "Use Git Bash from a known install path (never from PATH, which can resolve to the WSL launcher).",
             "Use PowerShell 7 if installed, otherwise Windows PowerShell."
           ],
