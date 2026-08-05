@@ -171,6 +171,6 @@ vsce package               # Creates .vsix file
 ## Key Architectural Notes
 
 - **No webviews or custom UI** — all interaction is via VS Code command palette, native dialogs, and the `Mosayic WebSocket` output channel.
-- **Single connection per user** — the WebSocket manager in the backend tracks one connection per user ID. New connections replace old ones.
+- **Single connection per user** — the WebSocket manager in the backend tracks one connection per user ID. New connections replace old ones: the losing socket is closed with code **4001**, and the extension responds by *standing down* (state `standby`, "connected in another window" in the status bar) instead of reconnecting — auto-reconnecting on 4001 would make two open windows steal the connection from each other forever. The user reclaims explicitly via the status bar / notification button / the dashboard's "Open VS Code" wake (all of which run `vscode-mosayic.connect`); the newly displaced window then stands down in turn.
 - **Extension is stateless** — it doesn't store project data. It just authenticates and executes commands sent by the backend. Project state lives in Supabase, managed by the backend.
 - **Commands execute in workspace root** — the first open workspace folder is used as the working directory for all shell commands.

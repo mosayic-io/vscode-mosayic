@@ -94,6 +94,12 @@ export function activate(context: vscode.ExtensionContext) {
 				statusBar.command = 'vscode-mosayic.showOutput';
 				statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
 				break;
+			case 'standby':
+				statusBar.text = '$(debug-disconnect) Mosayic: other window';
+				statusBar.tooltip = 'Mosayic is connected in another VS Code window — dashboard actions run there. Click to use this window instead.';
+				statusBar.command = 'vscode-mosayic.connect';
+				statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+				break;
 			case 'auth-error':
 				statusBar.text = '$(key) Mosayic: auth failed';
 				statusBar.tooltip = `Authentication failed (${detail ?? 'unknown'}). Click to sign in again.`;

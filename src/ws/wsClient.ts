@@ -22,6 +22,12 @@ const PONG_TIMEOUT = 75000;
 const MAX_RECONNECT_ATTEMPTS = 10;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024; // 10 MB
 const COMMAND_TIMEOUT_MS = 600_000;
+// The backend keeps ONE WebSocket per user and closes the losing socket with
+// this code when a new connection (usually a second VS Code window) takes
+// over. Reconnecting on it would steal the slot right back — two windows
+// would fight over the connection forever, each winning for a second at a
+// time. We stand down instead; see the close handler.
+const CLOSE_CODE_REPLACED = 4001;
 
 export type WsState =
 	| 'signed-out'
@@ -29,6 +35,7 @@ export type WsState =
 	| 'connecting'
 	| 'connected'
 	| 'reconnecting'
+	| 'standby'
 	| 'auth-error'
 	| 'error';
 
@@ -313,6 +320,10 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	// Session-scoped "allow all" choice. Re-enabled on sign-out or extension
 	// reload, and via the ``Mosayic: Reset Command Prompts`` command.
 	private _sessionAllowAll = false;
+	// True once the "connected in another window" notification has been shown
+	// for the current stand-down. Reset on every successful connect so the
+	// user is told again if it happens again later.
+	private _replacedNoticeShown = false;
 	// Terminal-closed listeners we still owe a dispose call. Without this the
 	// subscription leaks if the WS client is torn down before the terminal
 	// closes.
@@ -469,6 +480,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		ws.on('open', () => {
 			this._logConn(`Connected to ${apiUrl}/ws`);
 			this._reconnectAttempt = 0;
+			this._replacedNoticeShown = false;
 			this._startPing();
 			// Announce host OS to the backend so platform-dependent flows
 			// (e.g. Supabase setup) can branch without a probe round-trip.
@@ -506,6 +518,17 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				this._logAuth(`Server closed WebSocket with auth code ${code}. Token is missing, expired, or rejected.`);
 				this._setState('auth-error', `code=${code}`);
 				void this._handleAuthFailure();
+				return;
+			}
+
+			if (code === CLOSE_CODE_REPLACED) {
+				// Another VS Code window connected for this account. Don't
+				// auto-reconnect — that's the two-window tug-of-war. Stand
+				// down and let the user reclaim explicitly (status bar /
+				// notification / the dashboard's "Open VS Code" wake).
+				this._logConn('Another VS Code window took over the Mosayic connection — standing by (no auto-reconnect).');
+				this._setState('standby', 'connected in another window');
+				this._notifyReplaced();
 				return;
 			}
 
@@ -589,6 +612,23 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		).then((choice) => {
 			if (choice === 'Sign in') {
 				void vscode.commands.executeCommand('vscode-mosayic.signIn');
+			}
+		});
+	}
+
+	private _notifyReplaced(): void {
+		if (this._replacedNoticeShown || this._disposed) { return; }
+		this._replacedNoticeShown = true;
+		void vscode.window.showWarningMessage(
+			'Mosayic is now connected in a different VS Code window — dashboard actions will run there. Close the other window, or take over from here.',
+			'Use this window',
+		).then((choice) => {
+			if (choice === 'Use this window') {
+				// Same path as the dashboard's "Open VS Code" wake — resets
+				// the retry counter and dials fresh. The other window then
+				// receives 4001 and stands down in turn, so exactly one
+				// window holds the connection at any time.
+				void vscode.commands.executeCommand('vscode-mosayic.connect');
 			}
 		});
 	}
