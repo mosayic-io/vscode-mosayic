@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { dirname, resolve as pathResolve } from 'path';
+import { dirname, isAbsolute, relative, resolve as pathResolve } from 'path';
 import { WebSocket } from 'ws';
 import {
 	getApiUrl,
@@ -10,7 +10,7 @@ import {
 	getConfirmMode,
 	isAllowlistedCommand,
 } from '../config';
-import { resolveCommandShell } from '../shell';
+import { resolveShellChoice } from '../shell';
 import { TerminalRegistry } from './managedTerminal';
 
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
@@ -28,6 +28,17 @@ const COMMAND_TIMEOUT_MS = 600_000;
 // would fight over the connection forever, each winning for a second at a
 // time. We stand down instead; see the close handler.
 const CLOSE_CODE_REPLACED = 4001;
+
+// Capabilities advertised in the ``hello`` handshake. The backend uses these
+// to pick a route that an older extension wouldn't understand, so a name here
+// is a promise: only add one when the behaviour it names is actually correct
+// on every platform.
+//
+// - ``native_file_patch``: read_file/write_file resolve paths correctly on
+//   Windows too. They have existed since 0.0.14, but until 0.2.3 the allowed-
+//   root check compared with a hardcoded "/" separator and rejected every
+//   Windows path, so the backend can only trust them from this version on.
+const EXTENSION_CAPABILITIES = ['native_file_patch'] as const;
 
 export type WsState =
 	| 'signed-out'
@@ -141,6 +152,41 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 }
 
 /**
+ * The roots the backend is allowed to point us at: the user's home directory
+ * and the active workspace folder, both symlink-resolved.
+ */
+function allowedRoots(): string[] {
+	const roots = [realpathSync(homedir())];
+	const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	if (workspace) {
+		try {
+			roots.push(realpathSync(workspace));
+		} catch {
+			// ignore — if the workspace root is unreadable, we still have home
+		}
+	}
+	return roots;
+}
+
+/**
+ * Is ``target`` the same as, or inside, one of ``roots``?
+ *
+ * Uses ``path.relative`` rather than a string prefix test because the
+ * separator differs per platform: a hand-rolled ``root + '/'`` prefix check
+ * never matches on Windows, where realpathSync returns backslash paths — so
+ * every Windows path except the home directory itself was rejected as
+ * "outside allowed directories". ``relative`` is also what stops
+ * ``/home/bobby`` from passing a ``/home/bob`` root, which the prefix test
+ * needed the trailing separator to catch.
+ */
+function isUnderAllowedRoot(target: string, roots: string[]): boolean {
+	return roots.some(root => {
+		const rel = relative(root, target);
+		return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+	});
+}
+
+/**
  * Validate and resolve a folder path received from the backend.
  *
  * - Must exist and be a directory.
@@ -173,19 +219,7 @@ function resolveFolderPath(folderPath: string): { path: string } | { error: stri
 	if (!stat.isDirectory()) {
 		return { error: 'Path is not a directory' };
 	}
-	const home = realpathSync(homedir());
-	const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-	const allowedRoots = [home];
-	if (workspace) {
-		try {
-			allowedRoots.push(realpathSync(workspace));
-		} catch {
-			// ignore — if the workspace root is unreadable, we still have home
-		}
-	}
-	const withSep = (p: string) => (p.endsWith('/') ? p : p + '/');
-	const underAllowed = allowedRoots.some(root => real === root || real.startsWith(withSep(root)));
-	if (!underAllowed) {
+	if (!isUnderAllowedRoot(real, allowedRoots())) {
 		return { error: 'Path is outside allowed directories (must be under $HOME or workspace root)' };
 	}
 	return { path: real };
@@ -228,19 +262,7 @@ function resolveFileWritePath(filePath: string): { path: string } | { error: str
 			return { error: 'Target path exists and is not a regular file' };
 		}
 	}
-	const home = realpathSync(homedir());
-	const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-	const allowedRoots = [home];
-	if (workspace) {
-		try {
-			allowedRoots.push(realpathSync(workspace));
-		} catch {
-			// ignore
-		}
-	}
-	const withSep = (p: string) => (p.endsWith('/') ? p : p + '/');
-	const underAllowed = allowedRoots.some(root => realExisting === root || realExisting.startsWith(withSep(root)));
-	if (!underAllowed) {
+	if (!isUnderAllowedRoot(realExisting, allowedRoots())) {
 		return { error: 'Path is outside allowed directories (must be under $HOME or workspace root)' };
 	}
 	const tail = absolute.slice(existing.length);
@@ -275,19 +297,7 @@ function resolveFileReadPath(filePath: string): { path: string } | { error: stri
 	if (!stat.isFile()) {
 		return { error: 'Path is not a regular file' };
 	}
-	const home = realpathSync(homedir());
-	const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-	const allowedRoots = [home];
-	if (workspace) {
-		try {
-			allowedRoots.push(realpathSync(workspace));
-		} catch {
-			// ignore
-		}
-	}
-	const withSep = (p: string) => (p.endsWith('/') ? p : p + '/');
-	const underAllowed = allowedRoots.some(root => real === root || real.startsWith(withSep(root)));
-	if (!underAllowed) {
+	if (!isUnderAllowedRoot(real, allowedRoots())) {
 		return { error: 'Path is outside allowed directories (must be under $HOME or workspace root)' };
 	}
 	return { path: real };
@@ -324,6 +334,10 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	// for the current stand-down. Reset on every successful connect so the
 	// user is told again if it happens again later.
 	private _replacedNoticeShown = false;
+	// True once we've told the user Git Bash is missing. Session-scoped and
+	// never reset: installing Git Bash needs a VS Code restart to land on PATH
+	// anyway, so one notification per session is the right dose.
+	private _gitBashNoticeShown = false;
 	// Terminal-closed listeners we still owe a dispose call. Without this the
 	// subscription leaks if the WS client is torn down before the terminal
 	// closes.
@@ -484,10 +498,17 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			this._startPing();
 			// Announce host OS to the backend so platform-dependent flows
 			// (e.g. Supabase setup) can branch without a probe round-trip.
+			// ``shell`` is diagnostic: a student whose commands are dying
+			// inexplicably shows up in the API logs as shell=cmd.
+			// ``capabilities`` lets the backend prefer newer, safer routes
+			// without breaking extensions that predate them — an older client
+			// simply sends no list and keeps the old behaviour.
 			this._sendJson({
 				type: 'hello',
 				platform: process.platform,
 				arch: process.arch,
+				shell: resolveShellChoice().kind,
+				capabilities: EXTENSION_CAPABILITIES,
 			});
 			this._setState('connected', apiUrl);
 		});
@@ -659,6 +680,32 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		return choice === 'Allow' ? 'allow' : 'deny';
 	}
 
+	/**
+	 * Tell the user, once per session, that we couldn't find Git Bash and are
+	 * running their commands through cmd.exe — which cannot parse anything the
+	 * Mosayic backend sends. Without this the failure is silent and the errors
+	 * that reach the dashboard describe the symptom, never the cause.
+	 */
+	private _warnGitBashMissing(): void {
+		this._log(
+			'  WARNING: Git Bash not found — falling back to cmd.exe. Mosayic\'s ' +
+			'commands are POSIX and will fail. Install Git for Windows, or set ' +
+			'mosayic.windowsShell / the MOSAYIC_GIT_BASH environment variable.',
+		);
+		if (this._gitBashNoticeShown) { return; }
+		this._gitBashNoticeShown = true;
+		void vscode.window.showWarningMessage(
+			'Mosayic couldn\'t find Git Bash, so it\'s falling back to cmd.exe — ' +
+			'its setup steps need a POSIX shell and will fail. Install Git for ' +
+			'Windows (then restart VS Code) to fix this.',
+			'Get Git for Windows',
+		).then(choice => {
+			if (choice === 'Get Git for Windows') {
+				void vscode.env.openExternal(vscode.Uri.parse('https://git-scm.com/download/win'));
+			}
+		});
+	}
+
 	private async _executeCommand(requestId: string, command: string): Promise<void> {
 		try {
 			const consent = await this._consent(command, 'run a command');
@@ -691,17 +738,25 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				this._log(`  homedir ${home} also does not exist — falling back to /`);
 				cwd = '/';
 			}
-			this._log(`Executing: ${this._redact(command)} (cwd: ${cwd})`);
-
 			// Pick a shell per-platform. On Windows, a bare ``"bash"`` here would
 			// get PATH-resolved to ``C:\Windows\System32\bash.exe`` (the WSL
 			// distro launcher) on any box with WSL enabled, and every Mosayic
 			// command would run inside the user's Ubuntu instead of Windows.
-			// resolveCommandShell() defaults to cmd.exe on Windows (PATHEXT
-			// covers .exe/.cmd/.ps1), with opt-in Git Bash / PowerShell 7.
-			const shell = resolveCommandShell();
+			// resolveShellChoice() prefers Git Bash on Windows, with cmd.exe
+			// only as a last resort and PowerShell 7 available by opt-in.
+			const shellChoice = resolveShellChoice();
+			this._log(
+				`Executing: ${this._redact(command)} (cwd: ${cwd}, shell: ${shellChoice.kind})`,
+			);
+			// Everything the backend relays is POSIX. On cmd.exe the failures are
+			// baffling ("'true' is not recognized", "Unterminated string
+			// constant"), so name the real cause once rather than let the student
+			// report the symptom.
+			if (shellChoice.fellBackToCmd) {
+				this._warnGitBashMissing();
+			}
 			const child = spawn(command, {
-				shell,
+				shell: shellChoice.shell,
 				cwd,
 				timeout: COMMAND_TIMEOUT_MS,
 			});

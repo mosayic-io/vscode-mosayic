@@ -4,6 +4,16 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-08-10
+
+### Fixed
+- Windows: Git Bash is now also found at per-user install locations — `%LOCALAPPDATA%\Programs\Git` (Git for Windows' "install for me only" option, and winget) and scoop's `~\scoop\apps\git\current`. Previously only the two system-wide `Program Files` paths were probed, so a student without admin rights had a perfectly good Git Bash and still got the silent cmd.exe fallback, where every backend command dies with an inscrutable syntax error.
+- Windows: file and folder paths sent by the backend are no longer rejected as "outside allowed directories". The allowed-root check built its prefix with a hardcoded `/`, which never matches a backslash path, so on Windows everything except the home directory itself failed the guard — this broke `write_file` (the push lesson's `google-services.json` install) and `open_folder`. The check now uses `path.relative`, which is separator-aware and also stops `/home/bobby` passing a `/home/bob` root.
+
+### Added
+- Falling back to cmd.exe is no longer silent: the output channel logs a warning naming the cause, and a once-per-session notification offers a link to the Git for Windows download.
+- The `hello` handshake now reports the resolved shell (`gitbash` / `cmd` / `pwsh` / `posix`) and a capability list. The shell is diagnostic — a student whose commands are failing shows up in the API logs as `shell=cmd` — and `native_file_patch` tells the backend it can patch JSON files through `read_file`/`write_file` instead of relaying `node -e '<js>'` through a shell that may not be POSIX. Older extensions send neither field and keep the existing behaviour.
+
 ## [0.2.2] - 2026-08-05
 
 ### Changed

@@ -104,10 +104,25 @@ Incoming from backend:
 
 Outgoing to backend:
 ```json
+{ "type": "hello", "platform": "win32", "arch": "x64",
+  "shell": "gitbash", "capabilities": ["native_file_patch"] }
 { "type": "command_output", "request_id": "uuid", "text": "partial stdout" }
 { "type": "command_result", "request_id": "uuid", "stdout": "...", "stderr": "...", "exit_code": 0 }
 { "type": "ping" }
 ```
+
+`hello` goes out once per connect. `shell` and `capabilities` are new in 0.2.3.
+
+- **`shell`** (`gitbash` | `cmd` | `pwsh` | `posix`) is diagnostic — the backend
+  logs it, and `cmd` is a red flag there because everything it relays is POSIX.
+- **`capabilities`** (`EXTENSION_CAPABILITIES` in `wsClient.ts`) is how the
+  backend picks a route an older extension wouldn't understand; it treats a
+  missing list as "none" and keeps the old behaviour. **A name here is a
+  promise** — only add one when the behaviour it names is correct on every
+  platform. `native_file_patch` says `read_file`/`write_file` resolve paths
+  correctly on Windows too, which is what lets the backend patch app.json
+  through them instead of relaying `node -e '<js>'` into a shell that may not
+  be POSIX.
 
 ## Command Execution
 
