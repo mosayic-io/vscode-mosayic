@@ -4,6 +4,16 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-08-05
+
+### Changed
+- When the backend closes the WebSocket with code 4001 (the user's connection was claimed by another VS Code window), the extension now stands down instead of reconnecting: state `standby`, "connected in another window" in the status bar. Auto-reconnecting on 4001 made two open windows steal the connection from each other forever. The user reclaims explicitly via the status bar item, the notification button, or the dashboard's "Open VS Code" wake (all run `vscode-mosayic.connect`); the newly displaced window then stands down in turn.
+
+## [0.2.1] - 2026-08-03
+
+### Fixed
+- Windows: relayed commands now run through Git Bash. The `auto` value of `mosayic.windowsShell` prefers Git Bash (probed at the known install paths, overridable via `MOSAYIC_GIT_BASH`) and only falls back to cmd.exe when Git Bash isn't found. The backend's scaffold commands are POSIX (`[ -f … ]`, `mv`, `&&` chains) and died in cmd.exe with "The syntax of the command is incorrect" / "'true' is not recognized" — the first Windows student through the scaffold hit exactly that.
+
 ## [0.2.0] - 2026-07-27
 
 ### Added
