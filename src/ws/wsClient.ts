@@ -28,6 +28,14 @@ const COMMAND_TIMEOUT_MS = 600_000;
 // would fight over the connection forever, each winning for a second at a
 // time. We stand down instead; see the close handler.
 const CLOSE_CODE_REPLACED = 4001;
+// Mosayic is part of the Kealy Studio full membership. The backend accepts a
+// valid token from a free account and then closes with this code (after
+// accept, on purpose — a pre-accept rejection reaches us as a bare HTTP 403,
+// which the close handler reads as an expired token). Reconnecting would
+// only produce the same answer, so we stand down and say so, once.
+const CLOSE_CODE_MEMBERSHIP_REQUIRED = 4002;
+// Where a non-member is sent. The same CTA as the dashboard's own gate.
+const MEMBERSHIP_URL = 'https://kealy.studio';
 
 // Capabilities advertised in the ``hello`` handshake. The backend uses these
 // to pick a route that an older extension wouldn't understand, so a name here
@@ -47,6 +55,7 @@ export type WsState =
 	| 'connected'
 	| 'reconnecting'
 	| 'standby'
+	| 'members-only'
 	| 'auth-error'
 	| 'error';
 
@@ -334,6 +343,11 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	// for the current stand-down. Reset on every successful connect so the
 	// user is told again if it happens again later.
 	private _replacedNoticeShown = false;
+	// Same shape for the "members only" stand-down: one notification per
+	// rejected connection attempt, reset whenever a connection is accepted —
+	// so a deliberate retry after joining, or after switching account, is
+	// answered afresh rather than silently.
+	private _membersOnlyNoticeShown = false;
 	// True once we've told the user Git Bash is missing. Session-scoped and
 	// never reset: installing Git Bash needs a VS Code restart to land on PATH
 	// anyway, so one notification per session is the right dose.
@@ -495,6 +509,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			this._logConn(`Connected to ${apiUrl}/ws`);
 			this._reconnectAttempt = 0;
 			this._replacedNoticeShown = false;
+			this._membersOnlyNoticeShown = false;
 			this._startPing();
 			// Announce host OS to the backend so platform-dependent flows
 			// (e.g. Supabase setup) can branch without a probe round-trip.
@@ -550,6 +565,16 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				this._logConn('Another VS Code window took over the Mosayic connection — standing by (no auto-reconnect).');
 				this._setState('standby', 'connected in another window');
 				this._notifyReplaced();
+				return;
+			}
+
+			if (code === CLOSE_CODE_MEMBERSHIP_REQUIRED) {
+				// The token is fine; the account just isn't a member. Not an
+				// auth failure (no refresh would change the answer) and not
+				// a transport blip (no retry would either). Stand down.
+				this._logConn('This account is not a Kealy Studio member — Mosayic is part of the full membership. Standing by (no auto-reconnect).');
+				this._setState('members-only', 'not a member');
+				this._notifyMembersOnly();
 				return;
 			}
 
@@ -650,6 +675,22 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				// receives 4001 and stands down in turn, so exactly one
 				// window holds the connection at any time.
 				void vscode.commands.executeCommand('vscode-mosayic.connect');
+			}
+		});
+	}
+
+	private _notifyMembersOnly(): void {
+		if (this._membersOnlyNoticeShown || this._disposed) { return; }
+		this._membersOnlyNoticeShown = true;
+		void vscode.window.showWarningMessage(
+			'Mosayic is part of the Kealy Studio full membership, and this account doesn’t have one yet. Join at kealy.studio, or sign in with a member account.',
+			'Open kealy.studio',
+			'Sign out',
+		).then((choice) => {
+			if (choice === 'Open kealy.studio') {
+				void vscode.env.openExternal(vscode.Uri.parse(MEMBERSHIP_URL));
+			} else if (choice === 'Sign out') {
+				void vscode.commands.executeCommand('vscode-mosayic.signOut');
 			}
 		});
 	}

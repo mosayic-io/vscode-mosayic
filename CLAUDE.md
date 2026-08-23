@@ -1,16 +1,33 @@
 # Mosayic VS Code Extension (vscode-mosayic)
 
-## ⛔ HARD RULE: production data is untouchable
+## ⛔ HARD RULE: production is untouchable — data AND infrastructure
 
 **NEVER add, update, or remove production data in Supabase.** No INSERT /
 UPDATE / DELETE / UPSERT / TRUNCATE against the production database by any
 route — SQL editor, `supabase` CLI, `psql`, PostgREST / service-role key,
 admin endpoints, one-off scripts, anything.
 
-Allowed: running releases (including the migrations workflow — schema changes
-ride releases) and **read-only** production checks (statuses, logs,
-dashboards, SELECTs). If a task seems to require touching prod data, stop and
-ask John — do not do it as a side effect of something else.
+**NEVER run anything on or against production.** Not even read-only. That
+means: no `fly ssh console` into the API machine to run Python, shell or
+SQL (it is a 256MB box — a second process OOM-kills the live API, which is
+exactly what happened on 2026-08-23); no one-off scripts, REPLs or curls that
+hold the production service-role key, DB connection string or any Fly
+secret; no pulling those secrets out of Fly (`printenv`, `fly ssh`, `fly
+secrets`) to use them from a dev machine; no "dry runs" or "previews"
+against prod data, however read-only the SELECT. "Read-only" describes the
+query, not the risk — the route, the credentials and the machine are the
+risk, and they are John's.
+
+**Allowed, and only these:** publishing releases (the migrations workflow
+rides them — schema changes and backfills ship as migrations, nothing else);
+reading the *public* surface like any visitor (`/health`, a live site bundle,
+the marketplace listing); and status/log read-outs from the tooling's own
+commands — `fly status`, `fly logs`, `fly machine status`, `gh run view`,
+`vsce show`. If a task wants anything from production beyond that — a count,
+a preview table, a backfill dry run, a name lookup — **stop and ask John**:
+he runs the query himself in the Supabase dashboard and pastes the result,
+or the need ships as a release (a migration, an admin-panel page). Never as
+a side effect of something else, and never because it seemed harmless.
 
 ## What is Mosayic
 
@@ -94,6 +111,22 @@ vscode-mosayic/
 - Max 10 attempts
 - On 403: attempts token refresh, then retries
 - After max retries: prompts user to sign in again
+- **Two close codes mean "don't"**: **4001** (another window took the
+  connection → `standby`) and **4002** (the account isn't a Kealy Studio
+  member → `members-only`). Neither reconnects, neither refreshes the token.
+
+**Members only** (since 0.2.4): Mosayic is part of the Kealy Studio full
+membership, and the backend enforces it on the handshake — a valid token from
+a free account is **accepted and then closed with 4002** (after accept on
+purpose: a pre-accept rejection arrives here as a bare HTTP 403, which the
+close handler reads as an expired token). The extension stands down: state
+`members-only`, `$(lock) Mosayic: members only` in the status bar, one
+notification per rejected attempt ("Open kealy.studio" / "Sign out" to switch
+account — vocabulary is "full membership" / "Kealy Studio", never "premium").
+Clicking the status bar item runs `vscode-mosayic.connect`, the explicit
+retry for after they've joined. The marketplace listing is public and sign-in
+accepts any Google/GitHub account, so this is the only thing standing between
+a free sign-up and a live command channel.
 
 **Message protocol** (JSON):
 

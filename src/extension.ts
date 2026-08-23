@@ -100,6 +100,12 @@ export function activate(context: vscode.ExtensionContext) {
 				statusBar.command = 'vscode-mosayic.connect';
 				statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
 				break;
+			case 'members-only':
+				statusBar.text = '$(lock) Mosayic: members only';
+				statusBar.tooltip = 'Mosayic is part of the Kealy Studio full membership — this account doesn’t have one. Join at https://kealy.studio, then click to connect again.';
+				statusBar.command = 'vscode-mosayic.connect';
+				statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+				break;
 			case 'auth-error':
 				statusBar.text = '$(key) Mosayic: auth failed';
 				statusBar.tooltip = `Authentication failed (${detail ?? 'unknown'}). Click to sign in again.`;

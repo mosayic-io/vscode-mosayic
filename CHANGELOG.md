@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-08-23
+
+### Changed
+- Mosayic is part of the Kealy Studio full membership, and the backend now says so on the WebSocket: a valid sign-in from an account without one is accepted and closed with code **4002**. The extension answers by standing down — state `members-only`, `$(lock) Mosayic: members only` in the status bar — with a single notification offering kealy.studio or a sign-out to switch account, instead of what an older extension does with the same close: ten reconnect attempts over three minutes and then a "session expired" prompt that sends the student to re-sign-in with the same account. No token refresh is attempted (the token was fine) and no auto-reconnect (the answer wouldn't change); clicking the status bar item retries explicitly, which is the path after joining. Needs a backend that sends the code (mosayic-api's members-only gate, shipped alongside); against an older backend nothing changes.
+
 ## [0.2.3] - 2026-08-10
 
 ### Fixed
