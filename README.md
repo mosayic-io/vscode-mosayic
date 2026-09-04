@@ -10,6 +10,7 @@ This extension is the bridge between the Mosayic web dashboard and your local ma
 - **Connects to the Mosayic backend** over a persistent WebSocket.
 - **Executes commands** sent from the dashboard (`gh`, `gcloud`, `expo`, `supabase`, etc.) inside your current VS Code workspace.
 - **Streams output** back to the dashboard in real time.
+- **Gets Claude Code ready** — tells the dashboard whether the Claude Code extension is installed and signed in, installs it on request, opens it, and runs the dashboard's sample prompts through it headless.
 
 Your credentials stay yours: tokens are stored in your OS keychain and secrets are redacted from logs.
 

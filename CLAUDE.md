@@ -54,6 +54,7 @@ vscode-mosayic/
 ├── src/
 │   ├── extension.ts            # Main entry: activation, command registration, lifecycle
 │   ├── config.ts               # Configuration helpers (getApiUrl)
+│   ├── claude.ts               # The Claude Code bridge: install/sign-in status, silent install, open a panel, headless `claude -p` runs
 │   ├── auth/
 │   │   ├── authProvider.ts     # OAuth2 auth provider: login, token storage, refresh
 │   │   └── uriHandler.ts      # URI callback handler for OAuth redirect
@@ -151,7 +152,9 @@ Outgoing to backend:
 { "type": "ping" }
 ```
 
-`hello` goes out once per connect. `shell` and `capabilities` are new in 0.2.3.
+`hello` goes out once per connect. `shell` and `capabilities` are new in 0.2.3;
+`home` (the user's home directory, `os.homedir()`, native path style — the
+dashboard's default project folder is `<home>/Mosayic`) is new in 0.2.6.
 
 - **`shell`** (`gitbash` | `cmd` | `pwsh` | `posix`) is diagnostic — the backend
   logs it, and `cmd` is a red flag there because everything it relays is POSIX.
@@ -162,7 +165,33 @@ Outgoing to backend:
   platform. `native_file_patch` says `read_file`/`write_file` resolve paths
   correctly on Windows too, which is what lets the backend patch app.json
   through them instead of relaying `node -e '<js>'` into a shell that may not
-  be POSIX.
+  be POSIX. `claude_bridge` (0.2.6) says the Claude Code messages below are
+  understood and `hello` carries `home`.
+
+**The Claude Code bridge** (`src/claude.ts`, 0.2.6). Mosayic builds with
+Claude Code, so the dashboard's onboarding has to know it's there — and the
+Start page hands it prompts. Anthropic's extension is not ours, so the bridge
+uses public seams only: the extension registry, the `claude` binary the
+extension ships (`<extensionPath>/resources/native-binary/claude`, which
+shares one credential store with any PATH-installed `claude`; the PATH
+fallback gets the nvm preamble), the observed
+`claude-vscode.editor.open(sessionId, initialPrompt)` command (it PRE-FILLS
+the input box, it does not send — a terminal running `claude` is the
+fallback), and the documented headless CLI (`claude -p`). Messages, each
+answered by `<type>_result` with the same `request_id`:
+
+| Incoming | Does | Reply |
+|----------|------|-------|
+| `claude_status` | `getExtension('anthropic.claude-code')` + `claude auth status` (JSON: `loggedIn`, `email`, `subscriptionType`) | `extension_installed`, `extension_version`, `cli` (`bundled`/`path`/null), `logged_in`, `email`, `subscription_type`, `auth_method`, `error` |
+| `claude_install` | `workbench.extensions.installExtension`, waits for the registry | `status` installed / already_installed / error |
+| `claude_open` `{prompt?, path?}` | Opens a panel, prompt waiting in the box (a bare open shows Claude's sign-in when logged out) | `status` opened / not_installed / error, `via` panel / terminal |
+| `claude_run` `{prompt, path}` | `claude -p <prompt> --permission-mode acceptEdits --output-format stream-json --verbose` in `path` (allowed-roots checked), progress distilled to human lines | `claude_output` `{text}` per line, then `claude_run_result` `{exit_code, result_text, error}` |
+| `claude_cancel` | Kills an in-flight run | — |
+
+None of it goes through the command consent filter: binary and flags are
+fixed here, the prompt is one argv entry (no shell), so the backend cannot
+turn a prompt into a shell command. Claude Code's own permission rules still
+apply — headless, anything but an edit is denied.
 
 ## Command Execution
 

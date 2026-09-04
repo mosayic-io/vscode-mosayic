@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-09-04
+
+### Added
+- **The Claude Code bridge** (`src/claude.ts`, capability `claude_bridge`). Mosayic builds with Claude Code, and the dashboard's onboarding now checks for it the way it checks for VS Code — through this extension, since a browser can see nothing on the machine. Four new backend messages: `claude_status` (is the `anthropic.claude-code` extension installed, and is it signed in — `claude auth status` run on the binary that extension ships under `resources/native-binary/`, which shares one credential store with any PATH-installed `claude`; falls back to PATH with the nvm preamble), `claude_install` (VS Code's own `workbench.extensions.installExtension`, no marketplace page), `claude_open` (a Claude Code panel via `claude-vscode.editor.open`, optionally with a prompt waiting in its input box — never sent on the student's behalf; a bare open shows Claude's sign-in when logged out; falls back to a terminal running `claude`), and `claude_run` (headless `claude -p <prompt> --permission-mode acceptEdits --output-format stream-json` in a backend-named project folder, progress distilled to human lines — what Claude says, which file it edits — and streamed back as `claude_output`, then `claude_run_result`; `claude_cancel` kills it). Nothing here passes through the command consent filter: the binary and flags are fixed in the extension and the prompt travels as one argv entry, never through a shell, so the backend cannot turn a prompt into a shell command. Claude Code's own permission rules still govern the prompt — in headless mode anything beyond an edit is denied, never silently allowed.
+- `hello` now carries `home` — the user's home directory as Node sees it (`os.homedir()`), in the platform's native path style. The dashboard's Start page proposes `<home>/Mosayic` as the project folder with it, no folder picker.
+
 ## [0.2.5] - 2026-09-04
 
 ### Added

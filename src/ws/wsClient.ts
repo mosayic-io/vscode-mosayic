@@ -12,6 +12,13 @@ import {
 } from '../config';
 import { resolveShellChoice } from '../shell';
 import { TerminalRegistry } from './managedTerminal';
+import {
+	getClaudeStatus,
+	installClaudeExtension,
+	openClaudePanel,
+	runClaudeHeadless,
+	type HeadlessRunHandle,
+} from '../claude';
 
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const PING_INTERVAL = 30000;
@@ -46,7 +53,13 @@ const MEMBERSHIP_URL = 'https://kealy.studio';
 //   Windows too. They have existed since 0.0.14, but until 0.2.3 the allowed-
 //   root check compared with a hardcoded "/" separator and rejected every
 //   Windows path, so the backend can only trust them from this version on.
-const EXTENSION_CAPABILITIES = ['native_file_patch'] as const;
+// - ``claude_bridge`` (0.2.6): the ``claude_status`` / ``claude_install`` /
+//   ``claude_open`` / ``claude_run`` messages are understood, and ``hello``
+//   carries ``home`` — the user's home directory as Node sees it, so the
+//   backend can propose ``<home>/Mosayic`` as a project folder without a
+//   folder picker, and in the platform's own path style (a Git Bash
+//   ``$HOME`` would come back as ``/c/Users/…``, which VS Code can't open).
+const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge'] as const;
 
 export type WsState =
 	| 'signed-out'
@@ -74,6 +87,12 @@ type IncomingMessage =
 	| { type: 'dev_server_status'; request_id: string; session_id: string }
 	| { type: 'write_file'; request_id: string; path: string; data: string }
 	| { type: 'read_file'; request_id: string; path: string }
+	// The Claude Code bridge (0.2.6, capability ``claude_bridge``) — see claude.ts.
+	| { type: 'claude_status'; request_id: string }
+	| { type: 'claude_install'; request_id: string }
+	| { type: 'claude_open'; request_id: string; prompt?: string; path?: string }
+	| { type: 'claude_run'; request_id: string; prompt: string; path: string }
+	| { type: 'claude_cancel'; request_id: string }
 	| { type: 'pong' };
 
 function isString(v: unknown): v is string {
@@ -151,6 +170,28 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 		case 'read_file':
 			if (isString(m.request_id) && isString(m.path)) {
 				return { type, request_id: m.request_id, path: m.path };
+			}
+			return undefined;
+		case 'claude_status':
+		case 'claude_install':
+		case 'claude_cancel':
+			if (isString(m.request_id)) {
+				return { type, request_id: m.request_id };
+			}
+			return undefined;
+		case 'claude_open':
+			if (isString(m.request_id)) {
+				return {
+					type,
+					request_id: m.request_id,
+					prompt: isString(m.prompt) ? m.prompt : undefined,
+					path: isString(m.path) ? m.path : undefined,
+				};
+			}
+			return undefined;
+		case 'claude_run':
+			if (isString(m.request_id) && isString(m.prompt) && isString(m.path)) {
+				return { type, request_id: m.request_id, prompt: m.prompt, path: m.path };
 			}
 			return undefined;
 		case 'pong':
@@ -393,8 +434,70 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			dev_server_status: (m) => this._devServerStatus(m.request_id, m.session_id),
 			write_file: (m) => this._writeFile(m.request_id, m.path, m.data),
 			read_file: (m) => this._readFile(m.request_id, m.path),
+			claude_status: (m) => void this._claudeStatus(m.request_id),
+			claude_install: (m) => void this._claudeInstall(m.request_id),
+			claude_open: (m) => void this._claudeOpen(m.request_id, m.prompt, m.path),
+			claude_run: (m) => this._claudeRun(m.request_id, m.prompt, m.path),
+			claude_cancel: (m) => this._claudeCancel(m.request_id),
 			pong: () => { this._lastPongAt = Date.now(); },
 		};
+	}
+
+	// ── Claude Code bridge ──────────────────────────────────────────
+
+	// Headless `claude -p` runs in flight, by request id, so the dashboard can
+	// cancel one and teardown can kill them all.
+	private _claudeRuns = new Map<string, HeadlessRunHandle>();
+
+	private async _claudeStatus(requestId: string): Promise<void> {
+		const status = await getClaudeStatus((line) => this._log(line));
+		this._sendJson({ type: 'claude_status_result', request_id: requestId, ...status });
+	}
+
+	private async _claudeInstall(requestId: string): Promise<void> {
+		const result = await installClaudeExtension((line) => this._log(line));
+		this._sendJson({ type: 'claude_install_result', request_id: requestId, ...result });
+	}
+
+	private async _claudeOpen(requestId: string, prompt?: string, path?: string): Promise<void> {
+		let cwd: string | undefined;
+		if (path) {
+			const resolved = resolveFolderPath(path);
+			if ('path' in resolved) { cwd = resolved.path; }
+		}
+		const result = await openClaudePanel(prompt, cwd, (line) => this._log(line));
+		this._sendJson({ type: 'claude_open_result', request_id: requestId, ...result });
+	}
+
+	private _claudeRun(requestId: string, prompt: string, path: string): void {
+		const resolved = resolveFolderPath(path);
+		if ('error' in resolved) {
+			this._log(`DENIED claude_run in "${path}": ${resolved.error}`);
+			this._sendJson({
+				type: 'claude_run_result', request_id: requestId,
+				exit_code: 1, result_text: null, error: resolved.error,
+			});
+			return;
+		}
+		const handle = runClaudeHeadless(
+			prompt,
+			resolved.path,
+			(text) => this._sendJson({ type: 'claude_output', request_id: requestId, text }),
+			(result) => {
+				this._claudeRuns.delete(requestId);
+				this._sendJson({ type: 'claude_run_result', request_id: requestId, ...result });
+			},
+			(line) => this._log(line),
+		);
+		this._claudeRuns.set(requestId, handle);
+	}
+
+	private _claudeCancel(requestId: string): void {
+		const handle = this._claudeRuns.get(requestId);
+		if (handle) {
+			this._log(`Cancelling claude run ${requestId}`);
+			handle.cancel();
+		}
 	}
 
 	get state(): WsState {
@@ -524,6 +627,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				arch: process.arch,
 				shell: resolveShellChoice().kind,
 				capabilities: EXTENSION_CAPABILITIES,
+				home: homedir(),
 			});
 			this._setState('connected', apiUrl);
 		});
@@ -1219,6 +1323,10 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	dispose(): void {
 		this._disposed = true;
 		this._cleanup();
+		for (const handle of this._claudeRuns.values()) {
+			try { handle.cancel(); } catch { /* best-effort */ }
+		}
+		this._claudeRuns.clear();
 		for (const listener of this._activeTerminalListeners) {
 			try { listener.dispose(); } catch { /* best-effort */ }
 		}
