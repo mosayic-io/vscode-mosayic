@@ -154,7 +154,7 @@ Outgoing to backend:
 
 `hello` goes out once per connect. `shell` and `capabilities` are new in 0.2.3;
 `home` (the user's home directory, `os.homedir()`, native path style — the
-dashboard's default project folder is `<home>/Mosayic`) is new in 0.2.6.
+dashboard's default project folder is `<home>/projects`) is new in 0.2.6.
 
 - **`shell`** (`gitbash` | `cmd` | `pwsh` | `posix`) is diagnostic — the backend
   logs it, and `cmd` is a red flag there because everything it relays is POSIX.

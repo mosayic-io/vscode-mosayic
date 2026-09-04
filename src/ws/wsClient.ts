@@ -56,7 +56,7 @@ const MEMBERSHIP_URL = 'https://kealy.studio';
 // - ``claude_bridge`` (0.2.6): the ``claude_status`` / ``claude_install`` /
 //   ``claude_open`` / ``claude_run`` messages are understood, and ``hello``
 //   carries ``home`` — the user's home directory as Node sees it, so the
-//   backend can propose ``<home>/Mosayic`` as a project folder without a
+//   backend can propose ``<home>/projects`` as a project folder without a
 //   folder picker, and in the platform's own path style (a Git Bash
 //   ``$HOME`` would come back as ``/c/Users/…``, which VS Code can't open).
 const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge'] as const;
