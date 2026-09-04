@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-09-04
+
+### Added
+- **Sign in from the dashboard, no second Google sign-in.** The dashboard's new "Connect VS Code" button opens `vscode://mosayic.vscode-mosayic/handoff?code=…&email=…` with a one-time, 60-second code minted for the account signed in to the dashboard. The extension asks the student to confirm (the dialog names the account and says the request came from the dashboard — anyone can craft a `vscode://` link, so a link nobody just clicked for is easy to refuse), trades the code for a session of its own at `POST /auth/vscode/exchange`, and connects. Already signed in as that account: it just reconnects. Signed in as someone else: the dialog offers to switch, and the old socket and its "Allow All" consent are dropped first. If the minted session belongs to anyone other than the named account the hand-off is refused. Any failure (an expired code, a backend that doesn't know the endpoint, a mismatched environment) offers the classic "Mosayic: Sign In" instead. VS Code itself offers to install the extension when the URI arrives and it isn't there, so one dashboard button now covers install + sign-in + connect. Needs mosayic-api with the hand-off endpoints (shipped alongside).
+
 ## [0.2.4] - 2026-08-23
 
 ### Changed

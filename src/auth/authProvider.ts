@@ -51,7 +51,61 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 
 	async createSession(_scopes: string[]): Promise<vscode.AuthenticationSession> {
 		const tokenData = await this._login();
+		return this._storeNewSession(tokenData, []);
+	}
 
+	/**
+	 * The dashboard → extension hand-off. The student is already signed in to
+	 * the dashboard; its "Connect VS Code" button minted a one-time code and
+	 * opened `vscode://mosayic.vscode-mosayic/handoff?code=…&email=…`. We trade
+	 * the code for a session of our own — no browser round-trip, no second
+	 * Google sign-in, and by construction the same account as the dashboard.
+	 *
+	 * `emailHint` is the address the dashboard put in the URI. It's a display
+	 * hint, not a credential: the session the backend mints is the truth, and
+	 * if it belongs to anyone else the hand-off is refused — a crafted link
+	 * can't sign this VS Code into an account the student didn't see named.
+	 * Replaces whatever session was stored (one account at a time).
+	 */
+	async createSessionFromHandoff(code: string, emailHint: string): Promise<vscode.AuthenticationSession> {
+		const apiUrl = getApiUrl();
+		const response = await fetch(`${apiUrl}/auth/vscode/exchange`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ code }),
+		});
+
+		if (!response.ok) {
+			let detail = `the backend answered ${response.status}`;
+			try {
+				const body = await response.json() as { detail?: unknown };
+				if (typeof body.detail === 'string' && body.detail) { detail = body.detail; }
+			} catch {
+				// non-JSON error body — keep the status text
+			}
+			throw new Error(detail);
+		}
+
+		const data = await response.json() as Partial<TokenData>;
+		if (!data.access_token || !data.refresh_token || !data.user_id) {
+			throw new Error('Incomplete authentication data received');
+		}
+		const email = data.email ?? '';
+		if (emailHint && email.toLowerCase() !== emailHint.toLowerCase()) {
+			throw new Error(`the sign-in code belonged to ${email || 'a different account'}, not ${emailHint}`);
+		}
+
+		const previous = await this.getSessions();
+		return this._storeNewSession(
+			{ access_token: data.access_token, refresh_token: data.refresh_token, user_id: data.user_id, email },
+			previous,
+		);
+	}
+
+	private async _storeNewSession(
+		tokenData: TokenData,
+		replacing: vscode.AuthenticationSession[],
+	): Promise<vscode.AuthenticationSession> {
 		const session: vscode.AuthenticationSession = {
 			id: randomBytes(8).toString('hex'),
 			accessToken: tokenData.access_token,
@@ -65,7 +119,7 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 		await this._context.secrets.store(SESSIONS_KEY, JSON.stringify([session]));
 		await this._context.secrets.store(REFRESH_TOKEN_KEY, tokenData.refresh_token);
 
-		this._sessionChangeEmitter.fire({ added: [session], removed: [], changed: [] });
+		this._sessionChangeEmitter.fire({ added: [session], removed: replacing, changed: [] });
 
 		return session;
 	}

@@ -17,7 +17,7 @@ Your credentials stay yours: tokens are stored in your OS keychain and secrets a
 
 1. Install the extension from the VS Code Marketplace.
 2. Open a folder in VS Code — this becomes the working directory for executed commands.
-3. Run **Mosayic: Sign In** from the command palette (`Ctrl/Cmd+Shift+P`).
+3. Click **Connect VS Code** on the Mosayic dashboard — it signs the extension in as your dashboard account. (Or run **Mosayic: Sign In** from the command palette, `Ctrl/Cmd+Shift+P`, and pick the same account.)
 4. Complete the Google sign-in in your browser.
 5. Head to [app.mosayic.io](https://app.mosayic.io) — your VS Code instance is now connected.
 

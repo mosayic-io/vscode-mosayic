@@ -270,6 +270,76 @@ export function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 
+	// Triggered by the dashboard's "Connect VS Code" button via
+	// vscode://mosayic.vscode-mosayic/handoff?code=…&email=…. The student is
+	// signed in to the dashboard already; the code is a one-time, 60-second
+	// token minted for that account. We confirm with the student (anyone can
+	// craft a vscode:// link, so the dialog names the account and says where
+	// the request came from), trade the code for our own session, and the
+	// session-change handler above connects the WebSocket. Any failure falls
+	// back to the classic "Mosayic: Sign In" — nothing is lost, just the
+	// shortcut.
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-mosayic.handoff', async (code?: string, emailHint?: string) => {
+			const log = (message: string) => wsClient.outputChannel.appendLine(`[${stamp()}] [auth] ${message}`);
+			if (!code) {
+				log('Hand-off URI arrived without a code — ignoring.');
+				return;
+			}
+			const who = emailHint || 'your Mosayic account';
+
+			const existing = await vscode.authentication.getSession(AUTH_TYPE, [], { createIfNone: false });
+			if (existing && emailHint && existing.account.label.toLowerCase() === emailHint.toLowerCase()) {
+				log(`Hand-off for ${emailHint} — already signed in as that account; connecting.`);
+				if (wsClient.state !== 'connected') {
+					await wsClient.forceReconnect();
+				}
+				void vscode.window.showInformationMessage(`Mosayic is already signed in as ${existing.account.label}.`);
+				return;
+			}
+
+			const connect = 'Connect';
+			const choice = await vscode.window.showInformationMessage(
+				existing ? `Switch Mosayic to ${who}?` : `Connect this VS Code to Mosayic as ${who}?`,
+				{
+					modal: true,
+					detail: existing
+						? `This VS Code is signed in to Mosayic as ${existing.account.label}. Connecting switches it to ${who}.\n\nOnly continue if you just clicked "Connect VS Code" on the Mosayic dashboard.`
+						: `The Mosayic dashboard in your browser is asking to sign this VS Code in.\n\nOnly continue if you just clicked "Connect VS Code" on the Mosayic dashboard.`,
+				},
+				connect,
+			);
+			if (choice !== connect) {
+				log('Hand-off declined.');
+				return;
+			}
+
+			if (existing) {
+				// Drop the old account's socket and its "Allow All" consent before
+				// the new session arrives; the session-change handler reconnects.
+				wsClient.disconnect();
+			}
+
+			try {
+				const session = await authProvider.createSessionFromHandoff(code, emailHint ?? '');
+				await context.globalState.update(LAST_API_URL_KEY, getApiUrl());
+				log(`Hand-off complete — signed in as ${session.account.label}.`);
+				void vscode.window.showInformationMessage(`Signed in to Mosayic as ${session.account.label}.`);
+			} catch (e: unknown) {
+				const msg = e instanceof Error ? e.message : String(e);
+				log(`Hand-off failed: ${msg}`);
+				const signIn = 'Sign in manually';
+				const fallback = await vscode.window.showErrorMessage(
+					`Mosayic couldn't finish the sign-in from the dashboard: ${msg}`,
+					signIn,
+				);
+				if (fallback === signIn) {
+					await vscode.commands.executeCommand('vscode-mosayic.signIn');
+				}
+			}
+		})
+	);
+
 	// Triggered by the dashboard's "Open VS Code" button via the
 	// vscode://mosayic.vscode-mosayic/wake URI. If signed in, force a fresh
 	// WebSocket connection. Otherwise prompt sign-in (which connects on success).

@@ -73,7 +73,7 @@ vscode-mosayic/
 **Activation**: `onStartupFinished` — activates automatically when VS Code finishes loading.
 
 **Startup sequence** (`src/extension.ts`):
-1. Register URI handler for OAuth callbacks
+1. Register URI handler for OAuth callbacks, the dashboard hand-off (`/handoff`), `/wake` and `/focus`
 2. Initialize authentication provider (reads stored sessions)
 3. Create WebSocket client
 4. If already authenticated, auto-connect WebSocket
@@ -91,6 +91,13 @@ vscode-mosayic/
 4. Backend completes PKCE flow, redirects to `vscode://mosayic.vscode-mosayic/auth-callback`
 5. Extension receives tokens (access, refresh) + user info via URI query params
 6. Tokens stored in VS Code's `secretStorage` (OS-level credential manager)
+
+**Dashboard hand-off** (since 0.2.5, `createSessionFromHandoff` + the `vscode-mosayic.handoff` command) — the primary path for new students:
+1. The signed-in dashboard calls `POST /auth/vscode/handoff` and opens `vscode://mosayic.vscode-mosayic/handoff?code=…&email=…` (one-time code, 60 s; the email is a display hint)
+2. `UriEventHandler` routes `/handoff` to the command; VS Code offers to install the extension first if it's missing and replays the URI
+3. Already signed in as that email → just reconnect. Otherwise a **modal confirm** names the account and where the request came from (login-CSRF guard: anyone can craft a `vscode://` link)
+4. `POST /auth/vscode/exchange` with the code → the extension's own session (its own refresh chain, never the browser's); refused if the minted session's email ≠ the hint
+5. Stored like a classic sign-in (replacing any previous session); any failure offers the classic "Mosayic: Sign In"
 
 **Token refresh** (`authProvider.ts:83-128`):
 - Triggered when WebSocket gets a 403
