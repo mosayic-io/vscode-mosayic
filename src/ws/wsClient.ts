@@ -79,7 +79,7 @@ type IncomingMessage =
 	| { type: 'command'; request_id: string; command: string }
 	| { type: 'terminal_command'; request_id: string; command: string; name?: string }
 	| { type: 'pick_folder'; request_id: string; title?: string }
-	| { type: 'open_folder'; request_id: string; path: string; notice?: 'scaffold_complete' }
+	| { type: 'open_folder'; request_id: string; path: string }
 	| { type: 'send_to_terminal'; name: string; text: string }
 	| { type: 'start_dev_server'; request_id: string; session_id: string; command: string; name?: string; path?: string }
 	| { type: 'stop_dev_server'; request_id: string; session_id: string }
@@ -126,8 +126,7 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 			return undefined;
 		case 'open_folder':
 			if (isString(m.request_id) && isString(m.path)) {
-				const notice = m.notice === 'scaffold_complete' ? 'scaffold_complete' : undefined;
-				return { type, request_id: m.request_id, path: m.path, notice };
+				return { type, request_id: m.request_id, path: m.path };
 			}
 			return undefined;
 		case 'send_to_terminal':
@@ -403,11 +402,6 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		[K in IncomingMessage['type']]: (m: Extract<IncomingMessage, { type: K }>) => void;
 	};
 
-	// Called just before openFolder reloads the workspace, when the backend
-	// flagged the open as the end of a scaffold. Lets the host extension
-	// persist a "show this on next activation" marker that survives the
-	// reload.
-	private _onScaffoldComplete: ((path: string) => void) | undefined;
 	// Most recent terminal name created via terminal_command. Used by the
 	// /focus URI handler to land the user on the right terminal after the
 	// dashboard's "open VS Code" deep link brings the window to the front.
@@ -416,17 +410,15 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	constructor(
 		getToken: () => Promise<string | undefined>,
 		refreshToken?: () => Promise<boolean>,
-		onScaffoldComplete?: (path: string) => void,
 	) {
 		this._getToken = getToken;
 		this._refreshToken = refreshToken;
-		this._onScaffoldComplete = onScaffoldComplete;
 		this._outputChannel = vscode.window.createOutputChannel('Mosayic WebSocket');
 		this._handlers = {
 			command: (m) => void this._executeCommand(m.request_id, m.command),
 			terminal_command: (m) => void this._runInTerminal(m.request_id, m.command, m.name),
 			pick_folder: (m) => void this._pickFolder(m.request_id, m.title),
-			open_folder: (m) => void this._openFolder(m.request_id, m.path, m.notice),
+			open_folder: (m) => void this._openFolder(m.request_id, m.path),
 			send_to_terminal: (m) => this._sendToTerminal(m.name, m.text),
 			start_dev_server: (m) => this._startDevServer(m.request_id, m.session_id, m.command, m.name, m.path),
 			stop_dev_server: (m) => this._stopDevServer(m.request_id, m.session_id),
@@ -442,6 +434,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			pong: () => { this._lastPongAt = Date.now(); },
 		};
 	}
+
 
 	// ── Claude Code bridge ──────────────────────────────────────────
 
@@ -1019,7 +1012,6 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	private async _openFolder(
 		requestId: string,
 		folderPath: string,
-		notice?: 'scaffold_complete',
 	): Promise<void> {
 		try {
 			const resolved = resolveFolderPath(folderPath);
@@ -1039,12 +1031,6 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			this._log(`Opening folder: ${resolved.path}`);
 			const uri = vscode.Uri.file(resolved.path);
 			this._sendJson({ type: 'open_folder_result', request_id: requestId, status: 'opened' });
-			// Persist the notice BEFORE the openFolder call — globalState
-			// survives the workspace reload, so the reactivated extension
-			// reads it and pops the post-scaffold dialog.
-			if (notice === 'scaffold_complete') {
-				this._onScaffoldComplete?.(resolved.path);
-			}
 			await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: false });
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

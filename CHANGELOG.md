@@ -4,6 +4,14 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-09-05
+
+### Changed
+- The folder picker's button is always "Choose". The dashboard's title used to land on the button too, and on macOS the native dialog shows no title — so a whole sentence sat on the button.
+
+### Removed
+- The post-scaffold modal ("Mosayic has set up your new project folder"). It pulled the student into VS Code for nothing — the dashboard's Start page is already showing the running app. `open_folder` no longer reads a `notice` field; the backend stopped sending it the same day, which silences the dialog on older extensions too.
+
 ## [0.2.6] - 2026-09-04
 
 ### Added
