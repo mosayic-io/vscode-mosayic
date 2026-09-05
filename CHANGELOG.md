@@ -4,6 +4,14 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-09-05
+
+### Removed
+- The `codex_bridge` and everything behind it (`codex_status` / `codex_install` / `codex_login` / `codex_open`). Codex's extension doesn't work the way Mosayic needs it to; Claude Code is the one agent Mosayic drives.
+
+### Changed
+- Dashboard prompts run headlessly again (`claude_run`), streaming their output back to the Mosayic UI, instead of being pre-filled into Claude Code's editor for the student to send. `claude_open` keeps its terminal fallback and pops no notification.
+
 ## [0.2.7] - 2026-09-05
 
 ### Changed
