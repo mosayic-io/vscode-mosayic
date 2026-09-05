@@ -1061,8 +1061,10 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				canSelectFolders: true,
 				canSelectFiles: false,
 				canSelectMany: false,
-				openLabel: title || 'Choose folder',
-				title: title || 'Choose folder',
+				// The button is always a single word: on macOS the native dialog
+				// shows no title at all, so a sentence here lands on the button.
+				openLabel: 'Choose',
+				title: title || 'Choose a folder',
 			});
 
 			const path = uris?.[0]?.fsPath ?? null;
