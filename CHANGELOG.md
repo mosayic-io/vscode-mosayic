@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-09-06
+
+### Added
+- **Headless runs can carry context** (capability `claude_sessions`). `claude_run` takes `session_id` (the id to give a new session, chosen by the caller so it can be resumed without parsing the stream), `resume` (continue that session — everything it read and wrote is still in context, and the prompt cache is warm) and `fork` (with `resume`, branch instead of extend, so sibling runs inherit a parent's exploration without inheriting each other). A headless run starts cold, so the dashboard's multi-run jobs were re-reading the same project from scratch every time, and a repair run was handed a compiler error about code it had written a minute earlier with no memory of writing it.
+- `claude_run_result` now reports the run's own numbers, straight off Claude's `result` event: `session_id`, `duration_ms`, `num_turns`, `input_tokens`, `output_tokens`, `cache_read_tokens`. These were dropped for every successful run, which left a forty-second run and an eight-minute one indistinguishable afterwards — so "why is this slow?" had no answer. The same line is written to the Mosayic output channel when a run finishes.
+
 ## [0.2.9] - 2026-09-06
 
 ### Changed

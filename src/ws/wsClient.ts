@@ -17,6 +17,7 @@ import {
 	installClaudeExtension,
 	openClaudePanel,
 	runClaudeHeadless,
+	type HeadlessRunSession,
 	type HeadlessRunHandle,
 } from '../claude';
 
@@ -59,7 +60,12 @@ const MEMBERSHIP_URL = 'https://kealy.studio';
 //   backend can propose ``<home>/projects`` as a project folder without a
 //   folder picker, and in the platform's own path style (a Git Bash
 //   ``$HOME`` would come back as ``/c/Users/…``, which VS Code can't open).
-const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge'] as const;
+// ``claude_sessions``: ``claude_run`` understands ``session_id`` / ``resume`` /
+// ``fork`` and reports the session and its metrics back on ``claude_run_result``.
+// An older extension ignores those fields and runs cold, which is exactly what
+// it did before — so the backend may send them to anyone, and reads this only
+// to know whether context is really being carried.
+const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions'] as const;
 
 export type WsState =
 	| 'signed-out'
@@ -91,7 +97,7 @@ type IncomingMessage =
 	| { type: 'claude_status'; request_id: string }
 	| { type: 'claude_install'; request_id: string }
 	| { type: 'claude_open'; request_id: string; prompt?: string; path?: string }
-	| { type: 'claude_run'; request_id: string; prompt: string; path: string }
+	| { type: 'claude_run'; request_id: string; prompt: string; path: string; session_id?: string; resume?: string; fork?: boolean }
 	| { type: 'claude_cancel'; request_id: string }
 	| { type: 'pong' };
 
@@ -429,7 +435,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			claude_status: (m) => void this._claudeStatus(m.request_id),
 			claude_install: (m) => void this._claudeInstall(m.request_id),
 			claude_open: (m) => void this._claudeOpen(m.request_id, m.prompt, m.path),
-			claude_run: (m) => this._claudeRun(m.request_id, m.prompt, m.path),
+			claude_run: (m) => this._claudeRun(m.request_id, m.prompt, m.path, { sessionId: m.session_id, resume: m.resume, fork: m.fork }),
 			claude_cancel: (m) => this._claudeCancel(m.request_id),
 			pong: () => { this._lastPongAt = Date.now(); },
 		};
@@ -462,13 +468,15 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		this._sendJson({ type: 'claude_open_result', request_id: requestId, ...result });
 	}
 
-	private _claudeRun(requestId: string, prompt: string, path: string): void {
+	private _claudeRun(requestId: string, prompt: string, path: string, session: HeadlessRunSession): void {
 		const resolved = resolveFolderPath(path);
 		if ('error' in resolved) {
 			this._log(`DENIED claude_run in "${path}": ${resolved.error}`);
 			this._sendJson({
 				type: 'claude_run_result', request_id: requestId,
 				exit_code: 1, result_text: null, error: resolved.error,
+				session_id: null, duration_ms: null, num_turns: null,
+				input_tokens: null, output_tokens: null, cache_read_tokens: null,
 			});
 			return;
 		}
@@ -478,9 +486,12 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			(text) => this._sendJson({ type: 'claude_output', request_id: requestId, text }),
 			(result) => {
 				this._claudeRuns.delete(requestId);
+				// `result` carries the session id and the run's own metrics; the
+				// dashboard resumes from the first and reports the rest.
 				this._sendJson({ type: 'claude_run_result', request_id: requestId, ...result });
 			},
 			(line) => this._log(line),
+			session,
 		);
 		this._claudeRuns.set(requestId, handle);
 	}

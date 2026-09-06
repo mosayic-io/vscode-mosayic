@@ -291,6 +291,28 @@ export async function openClaudePanel(
  * One line of progress for the dashboard, distilled from Claude's
  * `stream-json` output: what it is saying, and which files it touches.
  */
+/** A number off a stream event, or null — the shapes here are not ours to trust. */
+function num(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * The metrics Claude reports when a run ends. These used to be dropped on the
+ * floor for every successful run, which left a forty-second run and an
+ * eight-minute one looking identical afterwards — and made "why is this slow?"
+ * unanswerable for the dashboard AND for whoever is maintaining the prompts.
+ */
+function readResultMetrics(event: Record<string, unknown>): Partial<HeadlessRunResult> {
+	const usage = (event.usage ?? {}) as Record<string, unknown>;
+	return {
+		duration_ms: num(event.duration_ms),
+		num_turns: num(event.num_turns),
+		input_tokens: num(usage.input_tokens),
+		output_tokens: num(usage.output_tokens),
+		cache_read_tokens: num(usage.cache_read_input_tokens),
+	};
+}
+
 function describeStreamEvent(event: Record<string, unknown>, cwd: string): string[] {
 	const lines: string[] = [];
 	if (event.type === 'assistant') {
@@ -330,6 +352,43 @@ export interface HeadlessRunHandle {
 }
 
 /**
+ * How a run relates to the ones around it. A headless run starts cold — it has
+ * read nothing — so the dashboard's multi-run jobs used to re-explore the same
+ * project from scratch every time, and a repair run was handed a compiler error
+ * about code it had written sixty seconds earlier with no memory of writing it.
+ *
+ *   `sessionId` — the id to give a NEW session, chosen by the caller so it can
+ *                 resume it later without parsing anything out of the stream.
+ *   `resume`    — continue that session instead: everything it read and wrote
+ *                 is still in context, and the prompt cache is warm.
+ *   `fork`      — with `resume`, branch rather than extend. Five sibling runs
+ *                 that each fork the same parent inherit its exploration
+ *                 without inheriting each other.
+ */
+export interface HeadlessRunSession {
+	sessionId?: string;
+	resume?: string;
+	fork?: boolean;
+}
+
+/** What a finished run reports back. The metrics come from Claude's own `result` event. */
+export interface HeadlessRunResult {
+	exit_code: number;
+	result_text: string | null;
+	error: string | null;
+	/** The session this run used — pass it back as `resume` to continue it. */
+	session_id: string | null;
+	/** Wall-clock milliseconds, as Claude measured them. */
+	duration_ms: number | null;
+	/** How many assistant turns it took. High with little output means it was exploring. */
+	num_turns: number | null;
+	input_tokens: number | null;
+	output_tokens: number | null;
+	/** Tokens served from the prompt cache — near zero means the run started cold. */
+	cache_read_tokens: number | null;
+}
+
+/**
  * Run `prompt` through Claude Code headless (`claude -p`) in `cwd`, calling
  * `onLine` with human-readable progress and `onDone` once. Edits are
  * auto-accepted — the point of the dashboard's sample prompts is to watch a
@@ -341,22 +400,41 @@ export function runClaudeHeadless(
 	prompt: string,
 	cwd: string,
 	onLine: (text: string) => void,
-	onDone: (result: { exit_code: number; result_text: string | null; error: string | null }) => void,
+	onDone: (result: HeadlessRunResult) => void,
 	log: (line: string) => void,
+	session: HeadlessRunSession = {},
 ): HeadlessRunHandle {
 	const binary = findClaudeBinary();
 	const trimmed = prompt.trim().slice(0, MAX_PROMPT_CHARS);
+	const blank: HeadlessRunResult = {
+		exit_code: 1, result_text: null, error: null, session_id: null,
+		duration_ms: null, num_turns: null,
+		input_tokens: null, output_tokens: null, cache_read_tokens: null,
+	};
 	if (!binary || !trimmed) {
-		queueMicrotask(() => onDone({ exit_code: 1, result_text: null, error: binary ? 'Empty prompt' : 'Claude Code is not installed' }));
+		queueMicrotask(() => onDone({ ...blank, error: binary ? 'Empty prompt' : 'Claude Code is not installed' }));
 		return { cancel: () => undefined };
 	}
+
+	// A resumed session already knows the project; a fresh one is told which id
+	// to use so the caller can come back to it. `--session-id` and `--resume`
+	// are mutually exclusive — resuming defines the id by definition.
+	const sessionArgs: string[] = [];
+	if (session.resume) {
+		sessionArgs.push('--resume', session.resume);
+		if (session.fork) { sessionArgs.push('--fork-session'); }
+	} else if (session.sessionId) {
+		sessionArgs.push('--session-id', session.sessionId);
+	}
+
 	const spec = spawnSpec(binary, [
 		'-p', trimmed,
 		'--permission-mode', 'acceptEdits',
 		'--output-format', 'stream-json',
 		'--verbose',
+		...sessionArgs,
 	]);
-	log(`claude -p (${binary.kind}) in ${cwd}: ${trimmed.slice(0, 80)}`);
+	log(`claude -p (${binary.kind}) in ${cwd}${sessionArgs.length ? ` [${sessionArgs.join(' ')}]` : ''}: ${trimmed.slice(0, 80)}`);
 
 	let child: ChildProcess;
 	try {
@@ -368,18 +446,23 @@ export function runClaudeHeadless(
 		});
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
-		queueMicrotask(() => onDone({ exit_code: 1, result_text: null, error: msg }));
+		queueMicrotask(() => onDone({ ...blank, error: msg }));
 		return { cancel: () => undefined };
 	}
 
 	let buffer = '';
 	let stderr = '';
 	let resultText: string | null = null;
+	// Claude states its own session id on the `init` event and again on
+	// `result`. Read it rather than assuming ours was honoured — a forked run's
+	// id is one we never chose, and it is the id a repair run has to resume.
+	let sessionId: string | null = session.resume && !session.fork ? session.resume : (session.sessionId ?? null);
+	let metrics: Partial<HeadlessRunResult> = {};
 	let done = false;
 	const finish = (exitCode: number, error: string | null) => {
 		if (done) { return; }
 		done = true;
-		onDone({ exit_code: exitCode, result_text: resultText, error });
+		onDone({ ...blank, ...metrics, exit_code: exitCode, result_text: resultText, error, session_id: sessionId });
 	};
 
 	const handleLine = (line: string) => {
@@ -390,8 +473,12 @@ export function runClaudeHeadless(
 			onLine(trimmedLine);
 			return;
 		}
-		if (event.type === 'result' && typeof event.result === 'string') {
-			resultText = event.result;
+		if (typeof event.session_id === 'string' && event.session_id) {
+			sessionId = event.session_id;
+		}
+		if (event.type === 'result') {
+			if (typeof event.result === 'string') { resultText = event.result; }
+			metrics = readResultMetrics(event);
 		}
 		for (const text of describeStreamEvent(event, cwd)) {
 			onLine(text);
@@ -415,7 +502,14 @@ export function runClaudeHeadless(
 	child.on('close', (code) => {
 		if (buffer.trim()) { handleLine(buffer); }
 		const exitCode = code ?? 1;
-		log(`  claude -p finished: exit_code=${exitCode}`);
+		log(
+			`  claude -p finished: exit_code=${exitCode}`
+			+ ` session=${sessionId ?? '?'}`
+			+ ` ${metrics.duration_ms != null ? `${Math.round(metrics.duration_ms / 1000)}s` : '?s'}`
+			+ ` turns=${metrics.num_turns ?? '?'}`
+			+ ` in=${metrics.input_tokens ?? '?'} out=${metrics.output_tokens ?? '?'}`
+			+ ` cached=${metrics.cache_read_tokens ?? '?'}`,
+		);
 		finish(exitCode, exitCode === 0 ? null : (stderr.trim().slice(0, 500) || `claude exited with code ${exitCode}`));
 	});
 	child.on('error', (err) => {
