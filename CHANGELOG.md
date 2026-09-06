@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-09-06
+
+### Changed
+- A headless run (`claude_run`) gets **thirty minutes** instead of eight. The old limit was a hard wall-clock kill mid-write, and it was landing on real work rather than on wedged processes — porting a single screen of a student's Lovable app hit it. Nothing else about the run changes; the dashboard still splits long jobs into per-run chunks, so this is a backstop for a genuinely stuck process, not the thing that paces the work.
+
 ## [0.2.8] - 2026-09-05
 
 ### Removed

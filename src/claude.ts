@@ -35,9 +35,14 @@ export const CLAUDE_EXTENSION_ID = 'anthropic.claude-code';
 
 const AUTH_STATUS_TIMEOUT_MS = 20_000;
 const INSTALL_SETTLE_TIMEOUT_MS = 15_000;
-// Headless runs: long enough for a multi-file edit on a slow laptop, short
-// enough that a wedged process doesn't hold the dashboard forever.
-const HEADLESS_RUN_TIMEOUT_MS = 8 * 60_000;
+// Headless runs. This is a hard wall-clock kill, mid-write, with no resume, so
+// it has to sit well clear of the real work: at eight minutes it was landing on
+// legitimate runs (porting one screen of a builder app), and a student's only
+// evidence was a step that failed for no stated reason. Thirty is long enough
+// that hitting it means something is genuinely wedged rather than merely slow —
+// the dashboard splits its own long jobs into per-run chunks that finish inside
+// a few minutes, and it is the one holding the student's attention, not this.
+const HEADLESS_RUN_TIMEOUT_MS = 30 * 60_000;
 const MAX_PROMPT_CHARS = 8_000;
 
 export interface ClaudeStatus {
