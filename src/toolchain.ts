@@ -477,9 +477,25 @@ async function installArchive(plan: Extract<InstallPlan, { kind: 'archive' }>, o
 		onProgress('Putting it on your PATH…', { phase: 'path' });
 		await exportPath();
 
+		// Verify through the shell first, because that's what every later step
+		// will use. If that says no, ask the binary itself before calling a
+		// perfectly good install a failure: the shell answer depends on the
+		// probe command, the profile and PATH, and any one of those being odd
+		// on this machine is not a reason to make the student install node
+		// twice. (It was exactly this: the probe sourced nvm unguarded, which
+		// aborts /bin/sh on a machine that has no nvm, so a working node
+		// reported "installed but still isn't running" forever.)
 		const checked = await verify(plan);
 		if (!checked.ok) {
-			return { status: 'error', error: `${plan.key} was installed to ${dest} but still isn't running. Restart VS Code and try again.` };
+			const direct = join(bin, process.platform === 'win32' ? `${plan.key}.exe` : plan.key);
+			const fallback = existsSync(direct)
+				? await spawnDirect(direct, ['--version'], 30_000)
+				: null;
+			if (!fallback || fallback.exitCode !== 0) {
+				return { status: 'error', error: `${plan.key} was installed to ${dest} but still isn't running. Restart VS Code and try again.` };
+			}
+			log(`${plan.key} verified by running ${direct} (the shell probe didn't see it)`);
+			return { status: 'installed', version: parseVersion(fallback.stdout) ?? plan.version, path: bin };
 		}
 		log(`installed ${plan.key} ${checked.version ?? plan.version} at ${dest}`);
 		return { status: 'installed', version: checked.version ?? plan.version, path: bin };

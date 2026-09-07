@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.14] - 2026-09-07
+
+### Fixed
+- **A freshly installed tool could report "installed but still isn't running", forever.** After unpacking a tool the extension checks it by running the backend's probe command — and on macOS or Linux that command sourced the user's nvm with a bare `.`, which is a POSIX *special built-in*: when the file isn't there (no nvm on the machine) it doesn't fail, it takes `/bin/sh` down with it, so nothing after it runs. A perfectly good Node install therefore looked like a failure, and restarting VS Code changed nothing because nothing was wrong with the install. The command is fixed in the backend; the extension now also asks the binary itself before calling an install a failure, so an odd PATH or profile on one machine can't make a student install the same thing twice.
+- The same unguarded `.` sat in front of a PATH-installed `claude`, which made the CLI fallback unreachable on a Mac without nvm.
+
 ## [0.2.13] - 2026-09-07
 
 ### Added

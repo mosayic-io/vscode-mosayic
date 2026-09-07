@@ -92,7 +92,13 @@ function findClaudeBinary(): ClaudeBinary | null {
 }
 
 function sourceNvm(): string {
-	return process.platform === 'win32' ? '' : '. "$HOME/.nvm/nvm.sh" >/dev/null 2>&1; ';
+	// Guarded, and never with a bare `;`: `.` is a POSIX special built-in, so
+	// sourcing a file that isn't there kills /bin/sh on the spot — the command
+	// after the separator never runs, whichever separator it is. On a Mac with
+	// no nvm this made the PATH-installed `claude` unreachable.
+	return process.platform === 'win32'
+		? ''
+		: '[ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true && ';
 }
 
 function shellQuote(value: string): string {
