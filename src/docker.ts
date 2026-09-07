@@ -74,29 +74,17 @@ export async function checkDocker(): Promise<DockerPreflightResult> {
 	});
 }
 
-// Surface the warning at most once per extension session (until VS Code
-// reloads), unless the user explicitly runs the check command.
-let warnedThisSession = false;
-
-export function resetDockerPreflightSessionWarning(): void {
-	warnedThisSession = false;
-}
-
 /**
- * Run the Docker preflight and optionally surface a notification. Safe to
- * fire-and-forget from extension activation — never throws, never blocks.
+ * Run the Docker check and report what it found. Only ever called because
+ * someone ASKED — the activation-time probe is gone, so every notification
+ * here is an answer to a question rather than an interruption. Never throws.
  *
  * @param output  Channel to log the outcome to (for the "Mosayic: Show Logs" flow).
- * @param manual  True when the user explicitly invoked the check command —
- *                 shows success/unknown notifications that are suppressed on
- *                 the passive startup probe.
  */
 export async function runDockerPreflight(
 	output: vscode.OutputChannel,
-	opts: { manual?: boolean } = {},
 ): Promise<void> {
 	const stamp = () => new Date().toLocaleTimeString();
-	const manual = opts.manual === true;
 
 	let result: DockerPreflightResult;
 	try {
@@ -110,17 +98,13 @@ export async function runDockerPreflight(
 	switch (result.state) {
 		case 'ok':
 			output.appendLine(`[${stamp()}] [docker] OK (Server ${result.version})`);
-			if (manual) {
-				void vscode.window.showInformationMessage(
-					`Docker is running (Server ${result.version}).`,
-				);
-			}
+			void vscode.window.showInformationMessage(
+				`Docker is running (Server ${result.version}).`,
+			);
 			return;
 
 		case 'not-installed': {
 			output.appendLine(`[${stamp()}] [docker] Not installed`);
-			if (!manual && warnedThisSession) { return; }
-			warnedThisSession = true;
 			const install = 'Install Docker Desktop';
 			const recheck = 'Re-check';
 			const choice = await vscode.window.showWarningMessage(
@@ -131,7 +115,7 @@ export async function runDockerPreflight(
 			if (choice === install) {
 				void vscode.env.openExternal(vscode.Uri.parse(DOCKER_INSTALL_URL));
 			} else if (choice === recheck) {
-				void runDockerPreflight(output, { manual: true });
+				void runDockerPreflight(output);
 			}
 			return;
 		}
@@ -140,15 +124,13 @@ export async function runDockerPreflight(
 			output.appendLine(
 				`[${stamp()}] [docker] Daemon not running${result.detail ? `: ${result.detail}` : ''}`,
 			);
-			if (!manual && warnedThisSession) { return; }
-			warnedThisSession = true;
 			const recheck = 'Re-check';
 			const choice = await vscode.window.showWarningMessage(
 				'Docker is installed but not running. Start Docker Desktop, then click Re-check.',
 				recheck,
 			);
 			if (choice === recheck) {
-				void runDockerPreflight(output, { manual: true });
+				void runDockerPreflight(output);
 			}
 			return;
 		}
@@ -157,11 +139,9 @@ export async function runDockerPreflight(
 			output.appendLine(
 				`[${stamp()}] [docker] Unknown state${result.detail ? `: ${result.detail}` : ''}`,
 			);
-			if (manual) {
-				void vscode.window.showWarningMessage(
-					'Unable to determine Docker status. See Mosayic output for details.',
-				);
-			}
+			void vscode.window.showWarningMessage(
+				'Unable to determine Docker status. See Mosayic output for details.',
+			);
 			return;
 		}
 	}

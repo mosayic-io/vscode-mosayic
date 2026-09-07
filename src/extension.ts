@@ -372,15 +372,15 @@ export function activate(context: vscode.ExtensionContext) {
 		})
 	);
 
+	// Docker is checked only when ASKED — never on activation. It is needed
+	// for a local Supabase, which comes much later than a student's first
+	// day, so warning about it at start-up interrupted people who had no use
+	// for Docker yet with a problem they couldn't act on. The step that needs
+	// it asks then.
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-mosayic.checkDocker', () => {
-			void runDockerPreflight(wsClient.outputChannel, { manual: true });
+			void runDockerPreflight(wsClient.outputChannel);
 		})
 	);
-
-	// Fire-and-forget: don't block activation on the Docker probe. A passive
-	// warning is surfaced at most once per session if Docker is missing /
-	// stopped; the command above lets users re-check explicitly.
-	void runDockerPreflight(wsClient.outputChannel);
 }
 
