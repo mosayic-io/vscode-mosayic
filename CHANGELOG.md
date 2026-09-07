@@ -4,6 +4,16 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.13] - 2026-09-07
+
+### Added
+- **Mosayic can install the tools your computer is missing** (capability `toolchain`). Three new messages — `toolchain_probe`, `toolchain_install` (streaming) and `toolchain_remove` — let the dashboard fill in git, Node.js, the GitHub CLI, uv and EAS instead of handing you a download page and hoping. The backend decides how (drive the nvm, brew, winget or scoop you already have; otherwise the official archive, resolved to your platform AND processor); the extension downloads it, checks it against the publisher's own sha256, unpacks it, puts it somewhere per-user and adds it to your PATH. Nothing needs admin rights or your password on any platform:
+  - **macOS git** is Apple's `xcode-select --install` dialog, fired on purpose from a button that warns you first. That prompt is what you already meet the first time anything runs the `/usr/bin/git` stub — now it arrives with a reason.
+  - **Windows git** is PortableGit unpacked into `%LOCALAPPDATA%\Programs\Git`, which this extension already searches for Git Bash — so a Windows machine that had no bash stops falling back to `cmd.exe`, which cannot run anything Mosayic relays.
+  - **PATH** is a marked, reversible block in `~/.zshrc` / `~/.bash_profile`, or the user Path in HKCU on Windows (via .NET's setter — never `setx`, which truncates PATH at 1024 characters).
+  - A tool you already have is **never touched**, and everything Mosayic installs is recorded in a manifest with where it came from, so the dashboard's new Machine page can list it and take it back off.
+- Everything the extension spawns — relayed commands, terminals, dev servers, Claude runs, the Docker probe — now sees the tools Mosayic installed, without waiting for a new login shell to read your profile. Installing node and using it in the next step now works in the same session.
+
 ## [0.2.12] - 2026-09-07
 
 ### Fixed

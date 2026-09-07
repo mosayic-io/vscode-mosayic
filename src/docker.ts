@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import { resolveCommandShell } from './shell';
+import { toolchainEnv } from './toolchain';
 
 const DOCKER_INSTALL_URL = 'https://www.docker.com/products/docker-desktop/';
 const DOCKER_PROBE_TIMEOUT_MS = 3000;
@@ -22,6 +23,7 @@ export async function checkDocker(): Promise<DockerPreflightResult> {
 	return new Promise((resolve) => {
 		const child = spawn('docker info --format "{{.ServerVersion}}"', {
 			shell: resolveCommandShell(),
+			env: toolchainEnv(),
 			timeout: DOCKER_PROBE_TIMEOUT_MS,
 		});
 

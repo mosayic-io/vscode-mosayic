@@ -4,6 +4,7 @@ import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { resolveShellChoice } from './shell';
+import { toolchainEnv } from './toolchain';
 
 /**
  * The Claude Code bridge.
@@ -136,7 +137,7 @@ function runCaptured(
 				shell: spec.shell,
 				cwd: opts.cwd,
 				timeout: opts.timeoutMs,
-				env: process.env,
+				env: toolchainEnv(),
 			});
 		} catch (err) {
 			finish(1, err instanceof Error ? err.message : String(err));
@@ -447,7 +448,7 @@ export function runClaudeHeadless(
 			shell: spec.shell,
 			cwd,
 			timeout: HEADLESS_RUN_TIMEOUT_MS,
-			env: process.env,
+			env: toolchainEnv(),
 		});
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);

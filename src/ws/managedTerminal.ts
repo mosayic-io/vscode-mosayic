@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { spawn, type ChildProcess } from 'child_process';
 import { resolveCommandShell } from '../shell';
+import { toolchainEnv } from '../toolchain';
 
 /**
  * A managed terminal that wraps a child process in a VS Code Pseudoterminal.
@@ -65,7 +66,7 @@ export class ManagedTerminal implements vscode.Pseudoterminal {
 		const child = spawn(this._command, {
 			shell: resolveCommandShell(),
 			cwd: this._cwd,
-			env: { ...process.env, FORCE_COLOR: '1', TERM: 'xterm-256color' },
+			env: toolchainEnv({ ...process.env, FORCE_COLOR: '1', TERM: 'xterm-256color' }),
 		});
 		this._child = child;
 

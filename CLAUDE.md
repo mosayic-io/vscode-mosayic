@@ -166,7 +166,9 @@ dashboard's default project folder is `<home>/projects`) is new in 0.2.6.
   correctly on Windows too, which is what lets the backend patch app.json
   through them instead of relaying `node -e '<js>'` into a shell that may not
   be POSIX. `claude_bridge` (0.2.6) says the Claude Code messages below are
-  understood and `hello` carries `home`.
+  understood and `hello` carries `home`. `toolchain` (0.2.13) says the
+  extension can acquire missing CLI tools itself — download, verify, unpack,
+  place, PATH — so the dashboard offers a button instead of a download link.
 
 **The Claude Code bridge** (`src/claude.ts`, 0.2.6). Mosayic builds with
 Claude Code, so the dashboard's onboarding has to know it's there — and the
@@ -192,6 +194,34 @@ None of it goes through the command consent filter: binary and flags are
 fixed here, the prompt is one argv entry (no shell), so the backend cannot
 turn a prompt into a shell command. Claude Code's own permission rules still
 apply — headless, anything but an edit is denied.
+
+**The toolchain bridge** (`src/toolchain.ts`, 0.2.13, capability `toolchain`).
+Installing the CLI tools a student is missing, instead of linking them to a
+download page. The backend decides *how* (`app/data/toolchain.py` +
+`app/services/toolchain.py`: reuse what's there → drive an nvm/brew/winget/
+scoop they already have → the official archive, resolved for platform AND
+arch, with the publisher's sha256); this side does it and reports progress.
+Everything is per-user — no admin rights, no password, on any platform.
+
+| Incoming | Does | Reply |
+|----------|------|-------|
+| `toolchain_probe` `{tools:[{key,command,binary}], managers:[{name,command}]}` | Runs the backend's own probe commands (so this can't disagree with `/system/probe-tools`) plus a `--version` per package manager. Provenance comes from our manifest: a tool inside a directory we installed is `mosayic`, anything else is `theirs` | `tools:[{key, installed, version, path, provenance}]`, `managers:[…]` |
+| `toolchain_install` `{plan}` | One rung, chosen by the backend. `archive`: download (https, redirects, progress) → **sha256 verify** → unpack (`tar`; `tar.exe` on Windows, which reads zips too, with `Expand-Archive` as fallback; PortableGit's 7-Zip SFX via `-o… -y`) → place → PATH → verify. `manager` / `npm`: run the line, then verify. `command`: fire a GUI installer (macOS git = `xcode-select --install`) and **poll the probe**, because the process exit means nothing and the student may have hit Cancel | `toolchain_output` `{text, percent?, phase?}` per step, then `toolchain_install_result` `{status, version, path, error}` |
+| `toolchain_remove` `{key}` | Deletes a tool from the manifest and rewrites PATH. Refuses anything that isn't ours | `status` removed / not_managed / error |
+
+**Placement** is the tool's own conventional per-user home where it has one —
+Windows git goes to `%LOCALAPPDATA%\Programs\Git`, which `shell.ts` already
+searches, so installing git also retires the cmd.exe fallback that can't parse
+anything the backend relays. Everything else lives under `~/.mosayic/tools`
+with a manifest recording version, source URL and directory, which is what
+makes `toolchain_remove` and the dashboard's Machine page honest.
+
+**PATH** is a marked, reversible block in `~/.zshrc` + `~/.bash_profile`, or
+the HKCU user Path via .NET's `SetEnvironmentVariable` on Windows — **never
+`setx`**, which truncates PATH at 1024 characters. And because a profile is
+only read by a NEW shell, `toolchainEnv()` prepends the managed directories at
+every spawn site (relayed commands, terminals, dev servers, Claude runs, the
+Docker probe) so a tool installed one step ago works in the next one.
 
 ## Command Execution
 

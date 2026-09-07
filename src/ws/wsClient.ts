@@ -11,6 +11,15 @@ import {
 	isAllowlistedCommand,
 } from '../config';
 import { resolveShellChoice } from '../shell';
+import {
+	installTool,
+	probeToolchain,
+	removeManagedTool,
+	toolchainEnv,
+	type InstallPlan,
+	type ManagerSpec,
+	type ProbeSpec,
+} from '../toolchain';
 import { missingProjectFolderMessage } from '../folderErrors';
 import { TerminalRegistry } from './managedTerminal';
 import {
@@ -66,7 +75,13 @@ const MEMBERSHIP_URL = 'https://kealy.studio';
 // An older extension ignores those fields and runs cold, which is exactly what
 // it did before — so the backend may send them to anyone, and reads this only
 // to know whether context is really being carried.
-const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions'] as const;
+// ``toolchain`` (0.2.13): ``toolchain_probe`` / ``toolchain_install`` /
+// ``toolchain_remove`` are understood — the extension can acquire git, node
+// and the on-demand CLIs itself instead of the dashboard handing the student
+// a download page. The backend resolves which artifact; this side downloads,
+// verifies, unpacks, places and PATHs it. An older extension advertises
+// nothing here and keeps getting the links.
+const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions', 'toolchain'] as const;
 
 export type WsState =
 	| 'signed-out'
@@ -99,6 +114,9 @@ type IncomingMessage =
 	| { type: 'claude_install'; request_id: string }
 	| { type: 'claude_open'; request_id: string; prompt?: string; path?: string }
 	| { type: 'claude_run'; request_id: string; prompt: string; path: string; session_id?: string; resume?: string; fork?: boolean }
+	| { type: 'toolchain_probe'; request_id: string; tools: ProbeSpec[]; managers: ManagerSpec[] }
+	| { type: 'toolchain_install'; request_id: string; plan: InstallPlan }
+	| { type: 'toolchain_remove'; request_id: string; key: string }
 	| { type: 'claude_cancel'; request_id: string }
 	| { type: 'pong' };
 
@@ -198,6 +216,32 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 		case 'claude_run':
 			if (isString(m.request_id) && isString(m.prompt) && isString(m.path)) {
 				return { type, request_id: m.request_id, prompt: m.prompt, path: m.path };
+			}
+			return undefined;
+		case 'toolchain_probe':
+			if (isString(m.request_id) && Array.isArray(m.tools) && Array.isArray(m.managers)) {
+				const tools = m.tools.filter((t: unknown): t is ProbeSpec =>
+					Boolean(t) && isString((t as ProbeSpec).key) && isString((t as ProbeSpec).command) && isString((t as ProbeSpec).binary));
+				const managers = m.managers.filter((t: unknown): t is ManagerSpec =>
+					Boolean(t) && isString((t as ManagerSpec).name) && isString((t as ManagerSpec).command));
+				return { type, request_id: m.request_id, tools, managers };
+			}
+			return undefined;
+		case 'toolchain_install':
+			// The plan is the backend's, and it is the backend's shape: what we
+			// check here is that it HAS a kind and a verify command, because
+			// those two are what stop a malformed message running something
+			// unbounded. The rest is validated by the install path itself.
+			{
+				const plan = m.plan as Record<string, unknown> | undefined;
+				if (isString(m.request_id) && plan && isString(plan.kind) && isString(plan.verify)) {
+					return { type, request_id: m.request_id, plan: plan as unknown as InstallPlan };
+				}
+			}
+			return undefined;
+		case 'toolchain_remove':
+			if (isString(m.request_id) && isString(m.key)) {
+				return { type, request_id: m.request_id, key: m.key };
 			}
 			return undefined;
 		case 'pong':
@@ -438,6 +482,9 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			claude_open: (m) => void this._claudeOpen(m.request_id, m.prompt, m.path),
 			claude_run: (m) => this._claudeRun(m.request_id, m.prompt, m.path, { sessionId: m.session_id, resume: m.resume, fork: m.fork }),
 			claude_cancel: (m) => this._claudeCancel(m.request_id),
+			toolchain_probe: (m) => void this._toolchainProbe(m.request_id, m.tools, m.managers),
+			toolchain_install: (m) => void this._toolchainInstall(m.request_id, m.plan),
+			toolchain_remove: (m) => void this._toolchainRemove(m.request_id, m.key),
 			pong: () => { this._lastPongAt = Date.now(); },
 		};
 	}
@@ -499,6 +546,30 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			session,
 		);
 		this._claudeRuns.set(requestId, handle);
+	}
+
+	// ── Toolchain bridge ────────────────────────────────────────────
+
+	private async _toolchainProbe(requestId: string, tools: ProbeSpec[], managers: ManagerSpec[]): Promise<void> {
+		const result = await probeToolchain(tools, managers, (line) => this._log(line));
+		this._sendJson({ type: 'toolchain_probe_result', request_id: requestId, ...result });
+	}
+
+	private async _toolchainInstall(requestId: string, plan: InstallPlan): Promise<void> {
+		const result = await installTool(
+			plan,
+			(text, extra) => this._sendJson({
+				type: 'toolchain_output', request_id: requestId, text,
+				percent: extra?.percent, phase: extra?.phase,
+			}),
+			(line) => this._log(line),
+		);
+		this._sendJson({ type: 'toolchain_install_result', request_id: requestId, ...result });
+	}
+
+	private async _toolchainRemove(requestId: string, key: string): Promise<void> {
+		const result = await removeManagedTool(key, (line) => this._log(line));
+		this._sendJson({ type: 'toolchain_remove_result', request_id: requestId, ...result });
 	}
 
 	private _claudeCancel(requestId: string): void {
@@ -912,6 +983,11 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			const child = spawn(command, {
 				shell: shellChoice.shell,
 				cwd,
+				// A tool we installed in the last step is only on the student's
+				// PATH after a NEW login shell reads their profile — so without
+				// this, the scaffold that follows an install fails on the very
+				// tool we just fetched.
+				env: toolchainEnv(),
 				timeout: COMMAND_TIMEOUT_MS,
 			});
 

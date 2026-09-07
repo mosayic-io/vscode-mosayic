@@ -54,7 +54,12 @@ function findGitBash(): string | null {
 		'C:\\Program Files\\Git\\bin\\bash.exe',
 		'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
 		'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
-		// Per-user installs: Git for Windows "only for me", and winget.
+		// Per-user installs: Git for Windows "only for me", winget — and the
+		// PortableGit that Mosayic's own toolchain installer unpacks here
+		// (src/toolchain.ts). That last one is deliberate: a machine with no
+		// git at all gets a real bash from the same directory the student's
+		// own installer would have used, so the cmd.exe fallback below — which
+		// cannot parse anything the backend relays — stops being reachable.
 		localAppData && join(localAppData, 'Programs', 'Git', 'bin', 'bash.exe'),
 		localAppData && join(localAppData, 'Programs', 'Git', 'usr', 'bin', 'bash.exe'),
 		// scoop keeps a "current" junction pointing at the active version.
