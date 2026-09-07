@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.12] - 2026-09-07
+
+### Fixed
+- **Installing Claude Code reported failure while it was still working.** VS Code can ask whether you trust the publisher before it installs an extension, and the extension only waited fifteen seconds for the new extension to appear before answering "the install command finished but the extension has not appeared yet. Reload VS Code and try again." A student reading that dialog spent longer than fifteen seconds on it, so a perfectly good install was called a failure. It now waits a minute, well inside the dashboard's own timeout. (The dashboard now also brings VS Code to the front when it starts the install, so the dialog is in front of you rather than behind the browser.)
+
 ## [0.2.11] - 2026-09-07
 
 ### Changed
