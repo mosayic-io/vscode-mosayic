@@ -11,6 +11,7 @@ import {
 	isAllowlistedCommand,
 } from '../config';
 import { resolveShellChoice } from '../shell';
+import { missingProjectFolderMessage } from '../folderErrors';
 import { TerminalRegistry } from './managedTerminal';
 import {
 	getClaudeStatus,
@@ -257,7 +258,7 @@ function resolveFolderPath(folderPath: string): { path: string } | { error: stri
 		return { error: 'Empty or malformed path' };
 	}
 	if (!existsSync(folderPath)) {
-		return { error: 'Path does not exist' };
+		return { error: missingProjectFolderMessage(folderPath) };
 	}
 	let real: string;
 	try {
@@ -462,7 +463,11 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		let cwd: string | undefined;
 		if (path) {
 			const resolved = resolveFolderPath(path);
-			if ('path' in resolved) { cwd = resolved.path; }
+			if ('error' in resolved) {
+				this._sendJson({ type: 'claude_open_result', request_id: requestId, status: 'error', error: resolved.error });
+				return;
+			}
+			cwd = resolved.path;
 		}
 		const result = await openClaudePanel(prompt, cwd, (line) => this._log(line));
 		this._sendJson({ type: 'claude_open_result', request_id: requestId, ...result });
@@ -1028,6 +1033,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			const resolved = resolveFolderPath(folderPath);
 			if ('error' in resolved) {
 				this._log(`DENIED open_folder "${folderPath}": ${resolved.error}`);
+				void vscode.window.showErrorMessage(resolved.error);
 				this._sendJson({
 					type: 'open_folder_result',
 					request_id: requestId,
@@ -1084,6 +1090,9 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		try {
 			const terminalName = name || 'Mosayic: Dev Server';
 			const workingDir = cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+			if (workingDir && !existsSync(workingDir)) {
+				throw new Error(missingProjectFolderMessage(workingDir));
+			}
 
 			this._log(`Starting dev server [${sessionId}]: ${this._redact(command)} in ${workingDir ?? '(no cwd)'}`);
 

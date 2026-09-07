@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-09-07
+
+### Fixed
+- **The dashboard hand-off could not sign in a machine that had never signed in the old way.** Every read of our session went through `vscode.authentication.getSession(…, { createIfNone: false })`, which answers only for accounts VS Code has recorded consent for — and answers `undefined`, silently, when it hasn't. Consent is recorded when a session is created THROUGH that layer (`createIfNone: true`), which the classic "Mosayic: Sign In" does; the hand-off calls the provider directly, which is the entire point of it. So on a fresh machine the hand-off stored a perfectly good session that the extension could not then see: a "Signed in as you@example.com" notification, a status bar reading "Mosayic: signed out", no token, no WebSocket, and a dashboard stuck on "Waiting for VS Code to connect…". It worked on any machine that had signed in the old way once — which is every developer's machine and no student's. The four places that READ a session now read it from our own provider (`authProvider.getSessions()`); the classic sign-in still goes through the account layer, where it belongs. That layer exists to stop other extensions using an account, not to hide one from the extension that owns it.
+- A project folder that has been deleted or moved is now said out loud: "Mosayic couldn't find your project folder at …. It may have been deleted or moved. Restore it from Trash or Recycle Bin, or update the folder paths in Settings if you moved it, then try again." It replaces the internal "Path does not exist", is shown in VS Code when an `open_folder` is refused, and is returned to the dashboard when a `claude_open` names a folder that isn't there — which previously opened Claude in the wrong place instead of failing.
+
 ## [0.2.10] - 2026-09-06
 
 ### Added

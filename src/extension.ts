@@ -26,9 +26,29 @@ export function activate(context: vscode.ExtensionContext) {
 	const authProvider = new MosayicAuthenticationProvider(context, uriHandler);
 	context.subscriptions.push(authProvider);
 
+	// Our own session, read from our own provider — never through
+	// `vscode.authentication.getSession`.
+	//
+	// That call answers only for accounts VS Code has recorded consent for,
+	// and it answers with `undefined`, silently, when it hasn't. Consent is
+	// recorded when a session is created THROUGH the account layer
+	// (`createIfNone: true`), which the classic sign-in does — but the
+	// dashboard hand-off calls the provider directly, because that is the
+	// whole point of it. On a machine that had never done a classic sign-in,
+	// the hand-off stored a perfectly good session that the extension then
+	// could not see: "signed in as you@example.com", status bar "signed out",
+	// no token, no WebSocket, no way for the student to tell why. It only
+	// ever worked on machines that had signed in the old way once, which is
+	// every developer's machine and no student's.
+	//
+	// The consent layer exists to stop OTHER extensions using an account.
+	// This is the extension that owns the provider.
+	const currentSession = async (): Promise<vscode.AuthenticationSession | undefined> =>
+		(await authProvider.getSessions())[0];
+
 	const wsClient = new MosayicWebSocketClient(
 		async () => {
-			const session = await vscode.authentication.getSession(AUTH_TYPE, [], { createIfNone: false });
+			const session = await currentSession();
 			return session?.accessToken;
 		},
 		async () => {
@@ -121,7 +141,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	void (async () => {
 		const storedUrl = context.globalState.get<string>(LAST_API_URL_KEY);
-		const session = await vscode.authentication.getSession(AUTH_TYPE, [], { createIfNone: false });
+		const session = await currentSession();
 
 		if (session && storedUrl && storedUrl !== apiUrl) {
 			wsClient.outputChannel.appendLine(
@@ -270,7 +290,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 			const who = emailHint || 'your Mosayic account';
 
-			const existing = await vscode.authentication.getSession(AUTH_TYPE, [], { createIfNone: false });
+			const existing = await currentSession();
 			if (existing && emailHint && existing.account.label.toLowerCase() === emailHint.toLowerCase()) {
 				log(`Hand-off for ${emailHint} — already signed in as that account; connecting.`);
 				if (wsClient.state !== 'connected') {
@@ -327,7 +347,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// WebSocket connection. Otherwise prompt sign-in (which connects on success).
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-mosayic.connect', async () => {
-			const session = await vscode.authentication.getSession(AUTH_TYPE, [], { createIfNone: false });
+			const session = await currentSession();
 			if (!session) {
 				wsClient.outputChannel.appendLine(`[${stamp()}] [auth] Wake requested but no session — running sign-in.`);
 				await vscode.commands.executeCommand('vscode-mosayic.signIn');
