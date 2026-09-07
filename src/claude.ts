@@ -34,7 +34,12 @@ import { resolveShellChoice } from './shell';
 export const CLAUDE_EXTENSION_ID = 'anthropic.claude-code';
 
 const AUTH_STATUS_TIMEOUT_MS = 20_000;
-const INSTALL_SETTLE_TIMEOUT_MS = 15_000;
+// Long enough to cover VS Code's own trust prompt. Installing an extension
+// can ask the student whether they trust the publisher, and 15s expired
+// while that dialog was still on screen — so a perfectly good install
+// reported "the extension has not appeared yet". The dashboard's request
+// allows 130s, so this stays well inside it.
+const INSTALL_SETTLE_TIMEOUT_MS = 60_000;
 // Headless runs. This is a hard wall-clock kill, mid-write, with no resume, so
 // it has to sit well clear of the real work: at eight minutes it was landing on
 // legitimate runs (porting one screen of a builder app), and a student's only
