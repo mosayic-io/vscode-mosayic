@@ -26,9 +26,50 @@ export function getApiUrl(): string {
 	const env = getEnvironment();
 	if (env === 'dev') { return DEV_API_URL; }
 	if (env === 'custom') {
-		return vscode.workspace.getConfiguration('mosayic').get<string>('apiUrl', PROD_API_URL);
+		// An empty custom URL is the setting's default (it used to default to
+		// a long-dead Cloud Run host, which a "custom" pick then dialled).
+		// Empty means "nothing custom" — fall back to production.
+		const custom = (vscode.workspace.getConfiguration('mosayic').get<string>('apiUrl', '') ?? '').trim();
+		return custom || PROD_API_URL;
 	}
 	return PROD_API_URL;
+}
+
+export function environmentLabel(env: Environment): string {
+	if (env === 'prod') { return 'Production'; }
+	if (env === 'dev') { return 'Development'; }
+	return 'Custom';
+}
+
+/**
+ * Canonical form of a backend URL for comparison: scheme and host lowercased,
+ * loopback names folded onto 127.0.0.1 (the dashboard says `localhost:8090`,
+ * DEV_API_URL says `127.0.0.1:8090` — the same server), trailing slashes
+ * dropped. Returns '' for anything that doesn't parse.
+ */
+export function normalizeBackendUrl(url: string): string {
+	try {
+		const u = new URL(url.trim());
+		let host = u.hostname.toLowerCase();
+		if (host === 'localhost' || host === '[::1]' || host === '::1') { host = '127.0.0.1'; }
+		const port = u.port ? `:${u.port}` : '';
+		const path = u.pathname.replace(/\/+$/, '');
+		return `${u.protocol}//${host}${port}${path}`;
+	} catch {
+		return '';
+	}
+}
+
+export function sameBackend(a: string, b: string): boolean {
+	const na = normalizeBackendUrl(a);
+	return na !== '' && na === normalizeBackendUrl(b);
+}
+
+/** The named environment a backend URL belongs to, if it is one of ours. */
+export function environmentForUrl(url: string): Exclude<Environment, 'custom'> | undefined {
+	if (sameBackend(url, PROD_API_URL)) { return 'prod'; }
+	if (sameBackend(url, DEV_API_URL)) { return 'dev'; }
+	return undefined;
 }
 
 export type ConfirmMode = 'allowlisted' | 'always' | 'never';

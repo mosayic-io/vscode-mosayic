@@ -10,6 +10,7 @@ import {
 	getConfirmMode,
 	isAllowlistedCommand,
 } from '../config';
+import type { RefreshOutcome } from '../auth/authProvider';
 import { resolveShellChoice } from '../shell';
 import {
 	installTool,
@@ -415,7 +416,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	// and we force a reconnect.
 	private _lastPongAt = 0;
 	private _getToken: () => Promise<string | undefined>;
-	private _refreshToken: (() => Promise<boolean>) | undefined;
+	private _refreshToken: (() => Promise<RefreshOutcome>) | undefined;
 	private _outputChannel: vscode.OutputChannel;
 	private _terminalRegistry = new TerminalRegistry();
 	private _state: WsState = 'idle';
@@ -460,7 +461,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 
 	constructor(
 		getToken: () => Promise<string | undefined>,
-		refreshToken?: () => Promise<boolean>,
+		refreshToken?: () => Promise<RefreshOutcome>,
 	) {
 		this._getToken = getToken;
 		this._refreshToken = refreshToken;
@@ -805,18 +806,18 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			}
 
 			this._logAuth('Attempting token refresh…');
-			let refreshed = await this._refreshToken();
+			let outcome = await this._refreshToken();
 
-			if (!refreshed && !this._disposed) {
-				this._logAuth('First refresh attempt failed, retrying in 2s…');
+			if (outcome === 'unavailable' && !this._disposed) {
+				this._logAuth('Backend unavailable during token refresh, retrying in 2s…');
 				await new Promise((r) => setTimeout(r, 2000));
 				if (this._disposed) { return; }
-				refreshed = await this._refreshToken();
+				outcome = await this._refreshToken();
 			}
 
 			if (this._disposed) { return; }
 
-			if (refreshed) {
+			if (outcome === 'refreshed') {
 				this._logAuth('Token refreshed successfully — reconnecting.');
 				this._reconnectAttempt = 0;
 				if (this._reconnectTimer) {
@@ -826,9 +827,16 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 					this._reconnectTimer = undefined;
 					if (!this._disposed) { void this.connect(); }
 				}, 500);
-			} else {
-				this._logAuth('Token refresh failed — sign in again to reconnect.');
+			} else if (outcome === 'expired') {
+				this._logAuth('The backend rejected the refresh token — sign in again to reconnect.');
 				this._promptSignIn();
+			} else {
+				// Nothing is known to be wrong with the session; the backend
+				// just couldn't say. Keep it and come back on the reconnect
+				// ladder — the sign-in prompt is for a dead session, not a
+				// restarting API.
+				this._logAuth('Could not refresh the session (backend unavailable) — keeping it and retrying.');
+				this._scheduleReconnect();
 			}
 		} finally {
 			this._refreshInFlight = false;

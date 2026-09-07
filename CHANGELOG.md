@@ -4,6 +4,16 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.15] - 2026-09-07
+
+### Changed
+- **The dashboard hand-off now says which backend minted the code, and the extension checks.** `vscode://mosayic.vscode-mosayic/handoff` carries `api=` (dashboards since 2026-09-07). If this VS Code is set to a different backend — a developer machine left on Production after a day of testing it, with the dashboard back on the local API — the confirm dialog names both and offers to **switch and connect** in one step when the dashboard's backend is Production or Development; any other host is named and refused, so a crafted link can't point the extension at an arbitrary server. Before, the code was redeemed against the wrong backend and the answer was "this sign-in code has expired or was already used", which was true of a backend that had never seen it. The "already signed in as that account" shortcut also no longer fires across a backend mismatch.
+- Every hand-off log line and the failure dialog now name the backend they went to (`backend: https://…`), so a mismatch is visible without scrolling back to the activation line.
+- `mosayic.apiUrl` no longer defaults to the long-retired Cloud Run host. It is empty by default; a "custom" environment with an empty URL falls back to Production.
+
+### Fixed
+- **A backend that couldn't answer no longer signs you out.** Any non-OK response to a token refresh — a 502 from a proxy, a restarting local API, a plain network error — used to delete the stored session and prompt for a fresh sign-in. Only a 401/403 verdict on the token does that now; everything else keeps the session and retries on the reconnect ladder.
+
 ## [0.2.14] - 2026-09-07
 
 ### Fixed

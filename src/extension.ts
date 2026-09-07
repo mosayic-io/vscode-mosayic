@@ -6,8 +6,11 @@ import {
 	AUTH_TYPE,
 	DEV_API_URL,
 	PROD_API_URL,
+	environmentForUrl,
+	environmentLabel,
 	getApiUrl,
 	getEnvironment,
+	sameBackend,
 	setEnvironment,
 	type Environment,
 } from './config';
@@ -46,14 +49,22 @@ export function activate(context: vscode.ExtensionContext) {
 	const currentSession = async (): Promise<vscode.AuthenticationSession | undefined> =>
 		(await authProvider.getSessions())[0];
 
+	const stamp = () => new Date().toLocaleTimeString();
+
 	const wsClient = new MosayicWebSocketClient(
 		async () => {
 			const session = await currentSession();
 			return session?.accessToken;
 		},
 		async () => {
-			const refreshed = await authProvider.refreshSession();
-			return refreshed !== undefined;
+			const outcome = await authProvider.refreshSession();
+			if (outcome !== 'refreshed') {
+				wsClient.outputChannel.appendLine(
+					`[${stamp()}] [auth] Token refresh against ${getApiUrl()} → ${outcome}` +
+					(authProvider.lastRefreshError ? ` (${authProvider.lastRefreshError})` : ''),
+				);
+			}
+			return outcome;
 		},
 	);
 	context.subscriptions.push(wsClient);
@@ -136,7 +147,6 @@ export function activate(context: vscode.ExtensionContext) {
 	// Activation trail — always visible in the output channel, so the user can
 	// confirm the extension is actually running and see what state it found.
 	const apiUrl = getApiUrl();
-	const stamp = () => new Date().toLocaleTimeString();
 	wsClient.outputChannel.appendLine(`[${stamp()}] [info] Mosayic extension activated. API URL: ${apiUrl}`);
 
 	void (async () => {
@@ -273,26 +283,53 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 
 	// Triggered by the dashboard's "Connect VS Code" button via
-	// vscode://mosayic.vscode-mosayic/handoff?code=…&email=…. The student is
-	// signed in to the dashboard already; the code is a one-time, 60-second
-	// token minted for that account. We confirm with the student (anyone can
-	// craft a vscode:// link, so the dialog names the account and says where
-	// the request came from), trade the code for our own session, and the
-	// session-change handler above connects the WebSocket. Any failure falls
-	// back to the classic "Mosayic: Sign In" — nothing is lost, just the
-	// shortcut.
+	// vscode://mosayic.vscode-mosayic/handoff?code=…&email=…&api=…. The student
+	// is signed in to the dashboard already; the code is a one-time, 60-second
+	// token minted for that account by the API the dashboard talks to. We
+	// confirm with the student (anyone can craft a vscode:// link, so the
+	// dialog names the account and says where the request came from), trade
+	// the code for our own session, and the session-change handler above
+	// connects the WebSocket. Any failure falls back to the classic
+	// "Mosayic: Sign In" — nothing is lost, just the shortcut.
+	//
+	// `api` is the backend that minted the code. Only that backend can redeem
+	// it, so if this VS Code is set to a different one (a dev machine left on
+	// Production after a day of testing prod, say) the exchange would fail
+	// with "expired" — a true statement about the wrong backend. Dashboards
+	// since 2026-09-07 say which; we compare, and when the dashboard's
+	// backend is one of ours (Production / Development) the confirm dialog
+	// offers to switch to it. Anything else is named and refused: a crafted
+	// link must not be able to point this extension at an arbitrary host.
 	context.subscriptions.push(
-		vscode.commands.registerCommand('vscode-mosayic.handoff', async (code?: string, emailHint?: string) => {
+		vscode.commands.registerCommand('vscode-mosayic.handoff', async (code?: string, emailHint?: string, apiHint?: string) => {
 			const log = (message: string) => wsClient.outputChannel.appendLine(`[${stamp()}] [auth] ${message}`);
 			if (!code) {
 				log('Hand-off URI arrived without a code — ignoring.');
 				return;
 			}
 			const who = emailHint || 'your Mosayic account';
+			const currentEnv = getEnvironment();
+			const currentApi = getApiUrl();
+			const describe = (env: Environment, url: string) => `${environmentLabel(env)} (${url})`;
+
+			// Which backend minted the code, and is it the one we're on?
+			let switchTo: Exclude<Environment, 'custom'> | undefined;
+			if (apiHint && !sameBackend(apiHint, currentApi)) {
+				switchTo = environmentForUrl(apiHint);
+				if (!switchTo) {
+					log(`Hand-off refused: the dashboard talks to ${apiHint}, this VS Code is set to ${describe(currentEnv, currentApi)}.`);
+					void vscode.window.showErrorMessage(
+						`This Mosayic dashboard talks to ${apiHint}, but this VS Code is set to ${describe(currentEnv, currentApi)}. ` +
+						'Run "Mosayic: Switch Backend…" to match it, then click Connect VS Code again.',
+					);
+					return;
+				}
+				log(`Hand-off from a ${environmentLabel(switchTo)} dashboard (${apiHint}) while set to ${describe(currentEnv, currentApi)} — offering to switch.`);
+			}
 
 			const existing = await currentSession();
-			if (existing && emailHint && existing.account.label.toLowerCase() === emailHint.toLowerCase()) {
-				log(`Hand-off for ${emailHint} — already signed in as that account; connecting.`);
+			if (!switchTo && existing && emailHint && existing.account.label.toLowerCase() === emailHint.toLowerCase()) {
+				log(`Hand-off for ${emailHint} — already signed in as that account on ${currentApi}; connecting.`);
 				if (wsClient.state !== 'connected') {
 					await wsClient.forceReconnect();
 				}
@@ -300,17 +337,26 @@ export function activate(context: vscode.ExtensionContext) {
 				return;
 			}
 
-			const connect = 'Connect';
-			const choice = await vscode.window.showInformationMessage(
-				existing ? `Switch Mosayic to ${who}?` : `Connect this VS Code to Mosayic as ${who}?`,
-				{
-					modal: true,
-					detail: existing
-						? `This VS Code is signed in to Mosayic as ${existing.account.label}. Connecting switches it to ${who}.\n\nOnly continue if you just clicked "Connect VS Code" on the Mosayic dashboard.`
-						: `The Mosayic dashboard in your browser is asking to sign this VS Code in.\n\nOnly continue if you just clicked "Connect VS Code" on the Mosayic dashboard.`,
-				},
-				connect,
-			);
+			const connect = switchTo ? 'Switch and connect' : 'Connect';
+			const csrfLine = 'Only continue if you just clicked "Connect VS Code" on the Mosayic dashboard.';
+			let title: string;
+			let detail: string;
+			if (switchTo) {
+				const target = describe(switchTo, apiHint ?? '');
+				title = `Switch Mosayic to ${environmentLabel(switchTo)} and connect as ${who}?`;
+				detail =
+					`The dashboard that sent this sign-in talks to ${target}, but this VS Code is set to ${describe(currentEnv, currentApi)}. ` +
+					`Connecting switches this VS Code to ${environmentLabel(switchTo)}` +
+					(existing ? `, signing out ${existing.account.label} there first` : '') +
+					`.\n\n${csrfLine}`;
+			} else if (existing) {
+				title = `Switch Mosayic to ${who}?`;
+				detail = `This VS Code is signed in to Mosayic as ${existing.account.label}. Connecting switches it to ${who}.\n\n${csrfLine}`;
+			} else {
+				title = `Connect this VS Code to Mosayic as ${who}?`;
+				detail = `The Mosayic dashboard in your browser is asking to sign this VS Code in.\n\n${csrfLine}`;
+			}
+			const choice = await vscode.window.showInformationMessage(title, { modal: true, detail }, connect);
 			if (choice !== connect) {
 				log('Hand-off declined.');
 				return;
@@ -321,18 +367,28 @@ export function activate(context: vscode.ExtensionContext) {
 				// the new session arrives; the session-change handler reconnects.
 				wsClient.disconnect();
 			}
+			if (switchTo) {
+				// The stored session belongs to the old backend — clear it before
+				// the URL changes, exactly as "Mosayic: Switch Backend…" does.
+				for (const s of await authProvider.getSessions()) {
+					await authProvider.removeSession(s.id);
+				}
+				await setEnvironment(switchTo);
+				log(`Switched backend to "${switchTo}" (${getApiUrl()}) for the hand-off.`);
+			}
 
+			const apiUrl = getApiUrl();
 			try {
 				const session = await authProvider.createSessionFromHandoff(code, emailHint ?? '');
-				await context.globalState.update(LAST_API_URL_KEY, getApiUrl());
-				log(`Hand-off complete — signed in as ${session.account.label}.`);
+				await context.globalState.update(LAST_API_URL_KEY, apiUrl);
+				log(`Hand-off complete — signed in as ${session.account.label} on ${apiUrl}.`);
 				void vscode.window.showInformationMessage(`Signed in to Mosayic as ${session.account.label}.`);
 			} catch (e: unknown) {
 				const msg = e instanceof Error ? e.message : String(e);
-				log(`Hand-off failed: ${msg}`);
+				log(`Hand-off failed against ${apiUrl}: ${msg}`);
 				const signIn = 'Sign in manually';
 				const fallback = await vscode.window.showErrorMessage(
-					`Mosayic couldn't finish the sign-in from the dashboard: ${msg}`,
+					`Mosayic couldn't finish the sign-in from the dashboard (backend: ${apiUrl}): ${msg}`,
 					signIn,
 				);
 				if (fallback === signIn) {

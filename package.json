@@ -2,7 +2,7 @@
   "name": "vscode-mosayic",
   "displayName": "Mosayic",
   "description": "Mosayic VS Code Extension",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "publisher": "mosayic",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -96,8 +96,8 @@
         },
         "mosayic.apiUrl": {
           "type": "string",
-          "default": "https://mosayic-api-service-336793731775.us-east1.run.app",
-          "description": "Custom Mosayic API URL. Only used when mosayic.environment is set to \"custom\"."
+          "default": "",
+          "description": "Custom Mosayic API URL (e.g. http://127.0.0.1:8080). Only used when mosayic.environment is set to \"custom\"; empty falls back to the production backend."
         },
         "mosayic.confirmCommands": {
           "type": "string",

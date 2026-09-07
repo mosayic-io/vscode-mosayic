@@ -13,6 +13,18 @@ interface TokenData {
 	email: string;
 }
 
+/**
+ * What a refresh attempt found out.
+ * - `refreshed`: new access token stored.
+ * - `expired`: the backend rejected the refresh token (401/403). The session
+ *   is gone and has been removed — the student must sign in again.
+ * - `unavailable`: the backend couldn't be reached, or answered with
+ *   something other than a verdict on the token (a 5xx, a restart, a
+ *   proxy page). The session is KEPT: nothing is known to be wrong with
+ *   it, and a restart of the local API mid-refresh used to sign John out.
+ */
+export type RefreshOutcome = 'refreshed' | 'expired' | 'unavailable';
+
 // Must stay in step with the backend's _ALLOWED_PROVIDERS
 // (mosayic-api, app/routes/vscode_auth_router.py).
 const SIGN_IN_PROVIDERS: Array<vscode.QuickPickItem & { id: string }> = [
@@ -139,57 +151,76 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 		}
 	}
 
-	async refreshSession(): Promise<vscode.AuthenticationSession | undefined> {
+	/** Last refresh failure, for the caller's log line. */
+	lastRefreshError: string | undefined;
+
+	async refreshSession(): Promise<RefreshOutcome> {
 		const refreshToken = await this._context.secrets.get(REFRESH_TOKEN_KEY);
 		if (!refreshToken) {
-			return undefined;
+			this.lastRefreshError = 'no refresh token stored';
+			return 'expired';
 		}
 
 		const apiUrl = getApiUrl();
+		let response: Response;
 		try {
-			const response = await fetch(`${apiUrl}/auth/vscode/refresh`, {
+			response = await fetch(`${apiUrl}/auth/vscode/refresh`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ refresh_token: refreshToken }),
 			});
-
-			if (!response.ok) {
-				// Capture sessions before deleting so the change event reports them
-				const sessions = await this.getSessions();
-				await this._context.secrets.delete(SESSIONS_KEY);
-				await this._context.secrets.delete(REFRESH_TOKEN_KEY);
-				this._sessionChangeEmitter.fire({ added: [], removed: sessions, changed: [] });
-				return undefined;
-			}
-
-			const data = await response.json() as TokenData;
-			const sessions = await this.getSessions();
-			const oldSession = sessions[0];
-			if (!oldSession) {
-				return undefined;
-			}
-
-			const newSession: vscode.AuthenticationSession = {
-				...oldSession,
-				accessToken: data.access_token,
-			};
-
-			await this._context.secrets.store(SESSIONS_KEY, JSON.stringify([newSession]));
-			await this._context.secrets.store(REFRESH_TOKEN_KEY, data.refresh_token);
-
-			this._sessionChangeEmitter.fire({ added: [], removed: [], changed: [newSession] });
-			return newSession;
 		} catch (e: unknown) {
-			const msg = e instanceof Error ? e.message : String(e);
-			// Surface the failure reason into VS Code's own logs rather than
-			// console.warn (which would echo into the global Debug Console and
-			// can be captured by other tools). The WS client will re-prompt
-			// sign-in on its side.
-			void vscode.window.showWarningMessage(
-				`Mosayic: token refresh failed (${msg}). Please sign in again.`,
-			);
-			return undefined;
+			// Network-level failure: the backend is down, or we're offline.
+			// That says nothing about the token, so the session stays.
+			this.lastRefreshError = e instanceof Error ? e.message : String(e);
+			return 'unavailable';
 		}
+
+		if (response.status === 401 || response.status === 403) {
+			// Only the backend's verdict on the token ends a session. Capture
+			// sessions before deleting so the change event reports them.
+			this.lastRefreshError = `the backend answered ${response.status}`;
+			const sessions = await this.getSessions();
+			await this._context.secrets.delete(SESSIONS_KEY);
+			await this._context.secrets.delete(REFRESH_TOKEN_KEY);
+			this._sessionChangeEmitter.fire({ added: [], removed: sessions, changed: [] });
+			return 'expired';
+		}
+		if (!response.ok) {
+			this.lastRefreshError = `the backend answered ${response.status}`;
+			return 'unavailable';
+		}
+
+		let data: Partial<TokenData>;
+		try {
+			data = await response.json() as Partial<TokenData>;
+		} catch {
+			this.lastRefreshError = 'the backend answered with something that was not JSON';
+			return 'unavailable';
+		}
+		if (!data.access_token || !data.refresh_token) {
+			this.lastRefreshError = 'the backend answered without tokens';
+			return 'unavailable';
+		}
+
+		const sessions = await this.getSessions();
+		const oldSession = sessions[0];
+		if (!oldSession) {
+			this.lastRefreshError = 'no session stored';
+			return 'expired';
+		}
+
+		const newSession: vscode.AuthenticationSession = {
+			...oldSession,
+			accessToken: data.access_token,
+		};
+
+		await this._context.secrets.store(SESSIONS_KEY, JSON.stringify([newSession]));
+		await this._context.secrets.store(REFRESH_TOKEN_KEY, data.refresh_token);
+
+		this._sessionChangeEmitter.fire({ added: [], removed: [], changed: [newSession] });
+		this.lastRefreshError = undefined;
+		return 'refreshed';
 	}
 
 	private async _login(): Promise<TokenData> {

@@ -94,9 +94,9 @@ vscode-mosayic/
 6. Tokens stored in VS Code's `secretStorage` (OS-level credential manager)
 
 **Dashboard hand-off** (since 0.2.5, `createSessionFromHandoff` + the `vscode-mosayic.handoff` command) — the primary path for new students:
-1. The signed-in dashboard calls `POST /auth/vscode/handoff` and opens `vscode://mosayic.vscode-mosayic/handoff?code=…&email=…` (one-time code, 60 s; the email is a display hint)
+1. The signed-in dashboard calls `POST /auth/vscode/handoff` and opens `vscode://mosayic.vscode-mosayic/handoff?code=…&email=…&api=…` (one-time code, 60 s; the email is a display hint; `api` is the backend the dashboard talks to — the one that minted the code)
 2. `UriEventHandler` routes `/handoff` to the command; VS Code offers to install the extension first if it's missing and replays the URI
-3. Already signed in as that email → just reconnect. Otherwise a **modal confirm** names the account and where the request came from (login-CSRF guard: anyone can craft a `vscode://` link)
+3. If `api` names a different backend than `getApiUrl()` (compared with `sameBackend`, which folds localhost onto 127.0.0.1): when it is Production or Development the modal offers **Switch and connect** (clears the session, `setEnvironment`, then exchanges); any other host is refused by name — a crafted link can't point the extension at an arbitrary server. Otherwise, already signed in as that email → just reconnect. Otherwise a **modal confirm** names the account and where the request came from (login-CSRF guard: anyone can craft a `vscode://` link)
 4. `POST /auth/vscode/exchange` with the code → the extension's own session (its own refresh chain, never the browser's); refused if the minted session's email ≠ the hint
 5. Stored like a classic sign-in (replacing any previous session); any failure offers the classic "Mosayic: Sign In"
 
@@ -110,7 +110,7 @@ vscode-mosayic/
 ## WebSocket Communication
 
 **Connection** (`src/ws/wsClient.ts`):
-- URL: `ws[s]://{apiUrl}/ws` (derived from `mosayic.apiUrl` setting)
+- URL: `ws[s]://{apiUrl}/ws` (from `getApiUrl()`: `mosayic.environment` → prod / dev constant, or `mosayic.apiUrl` when `custom`)
 - Auth: `Authorization: Bearer <access_token>` header
 - Keepalive: ping every 30 seconds
 
@@ -251,8 +251,10 @@ When a `command` message arrives (`wsClient.ts:153-217`):
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `mosayic.apiUrl` | string | `http://127.0.0.1:8080` | Mosayic API server URL |
-| `mosayic.confirmCommands` | boolean | `true` | Prompt before executing commands from server |
+| `mosayic.environment` | `prod` \| `dev` \| `custom` | `prod` | Which backend: `https://mosayic-api.fly.dev`, `http://127.0.0.1:8090`, or `mosayic.apiUrl`. Global — survives updates and repo switches. |
+| `mosayic.apiUrl` | string | `""` | The `custom` backend URL; empty falls back to production (the old default was the dead Cloud Run host) |
+| `mosayic.confirmCommands` | `allowlisted` \| `always` \| `never` | `allowlisted` | When to prompt before running a relayed command |
+| `mosayic.showDevCommands` | boolean | `false` | Show `Mosayic: Switch Backend…` in the palette |
 
 Settings are read via `vscode.workspace.getConfiguration('mosayic')` in `src/config.ts`.
 
