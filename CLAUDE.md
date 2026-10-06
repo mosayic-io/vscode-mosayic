@@ -233,7 +233,7 @@ When a `command` message arrives (`wsClient.ts:153-217`):
 2. **Spawns shell process** in the first workspace folder
 3. **Streams stdout** back as `command_output` messages
 4. **Sends final result** as `command_result` with stdout, stderr, exit_code
-5. **Limits**: 120s timeout, 10 MB max output buffer per stream
+5. **Limits**: 600s timeout (`COMMAND_TIMEOUT_MS`; the API's per-command `timeout` is NOT forwarded — the extension's constant wins), 10 MB max output buffer per stream
 
 **The allowlist** (`ALLOWED_FIRST_TOKENS` in `src/config.ts`) grew `xcrun`
 and `open` on 2026-10-06 for the dashboard's store-screenshots card, which
