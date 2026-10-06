@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.16] - 2026-10-06
+
+### Added
+- **`xcrun` and `open` are auto-approved.** The dashboard's new "Make your store screenshots" card drives the iPhone Simulator from the browser — `xcrun simctl` to find the newest Pro Max, boot it, copy your development build onto it, set Apple's 9:41 status bar, open each screen by link and capture it at the exact size the App Store wants; `open -a Simulator` (or DeviceHub on Xcode 27) to bring the window forward. Until this build is installed the dashboard sends those commands behind a `cd "<your app folder>" &&`, which the existing rules already accept, so nothing prompts either way.
+
 ## [0.2.15] - 2026-09-07
 
 ### Changed

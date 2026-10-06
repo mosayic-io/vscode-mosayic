@@ -235,6 +235,13 @@ When a `command` message arrives (`wsClient.ts:153-217`):
 4. **Sends final result** as `command_result` with stdout, stderr, exit_code
 5. **Limits**: 120s timeout, 10 MB max output buffer per stream
 
+**The allowlist** (`ALLOWED_FIRST_TOKENS` in `src/config.ts`) grew `xcrun`
+and `open` on 2026-10-06 for the dashboard's store-screenshots card, which
+drives the iPhone Simulator (`xcrun simctl list/boot/install/status_bar/
+openurl/io screenshot`, `open -a Simulator`). Until a student is on that
+build the dashboard sends them as `cd "<mobile folder>" && xcrun …`, which
+the first-token rule already accepts.
+
 **Security features**:
 - Credential redaction in logs (passwords, tokens, keys, Bearer headers)
 - Plaintext HTTP warning for remote (non-localhost) connections
