@@ -169,6 +169,8 @@ dashboard's default project folder is `<home>/projects`) is new in 0.2.6.
   understood and `hello` carries `home`. `toolchain` (0.2.13) says the
   extension can acquire missing CLI tools itself — download, verify, unpack,
   place, PATH — so the dashboard offers a button instead of a download link.
+  `claude_limits` (0.2.17) says `claude_run` honours an allowlist and limits
+  and reports refusals (see the Claude bridge below).
 
 **The Claude Code bridge** (`src/claude.ts`, 0.2.6). Mosayic builds with
 Claude Code, so the dashboard's onboarding has to know it's there — and the
@@ -193,7 +195,51 @@ answered by `<type>_result` with the same `request_id`:
 None of it goes through the command consent filter: binary and flags are
 fixed here, the prompt is one argv entry (no shell), so the backend cannot
 turn a prompt into a shell command. Claude Code's own permission rules still
-apply — headless, anything but an edit is denied.
+apply — headless, anything but an edit is denied (Claude Code also approves a
+few harmless read-only commands like `uname` or `wc` by itself).
+
+**Limits, refusals and Stop (0.2.17, capability `claude_limits`).**
+`claude_run` also takes `allowed_tools` (Claude Code tool rules, e.g.
+`Bash(git status *)` → `--allowedTools`, for that run only), `max_turns`
+(`--max-turns`, accepted though the CLI's help hides it), `max_budget_usd`
+(`--max-budget-usd`, Claude's own cost estimate, which it keeps on a
+subscription too), `timeout_s` (a shorter wall-clock kill than the thirty
+minutes) and `append_system_prompt`. `sanitizeLimits` checks and clamps every
+one (a rule must look like `Name` or `Name(pattern)`, ≤ 40 rules; turns 1–500,
+budget $0.05–50, timeout 60 s–30 min, prompt ≤ 4000 chars), so the backend can
+only make a run tighter. The backend owns WHICH rules (mosayic-api
+`services/claude_profiles.py`, picked by name). A refusal is found two ways:
+the tool's result is an error opening "This command requires approval" /
+"Claude requested permissions to use", and the result event's
+`permission_denials` (deduped by tool-use id). Each is sent as a `claude_output`
+whose `text` reads on its own ("Not allowed from here: `npm install`") plus
+`denial: {tool, command}`; the result carries `denials`, `stop_reason`
+(`error_max_turns` → `max_turns`, `error_max_budget_usd` → `budget`, our
+wall clock → `timeout`, a cancel → `cancelled`) and `cost_usd`. A Bash `$`
+line is sent once the command has RUN, never on the request. **Kills take the
+whole tree**: the PATH fallback runs `claude` through a shell, so the run is
+spawned `detached` (its own process group) and `killTree` signals the group
+(`taskkill /T /F` on Windows); before 0.2.17 a Stop or a timeout killed only
+the shell and Claude finished the job underneath. stdin is `ignore`, or
+`claude -p` waits 3 s for it on every run. A `resume` Claude doesn't know
+("No conversation found…") is restarted cold once in `wsClient._claudeRun`.
+The parser copies `session_id` / `resume` / `fork` across since 0.2.17; from
+0.2.10 to 0.2.16 it dropped them and every run was cold.
+
+**The status bar's Claude item** (`extension.ts`, `wsClient.onClaudeRunsChange`):
+"$(loading~spin) Claude is working on <folder> · Stop" while any run is in
+flight; clicking runs `vscode-mosayic.stopClaudeRuns` (a modal confirm, then
+`stopAllClaudeRuns`). It is the Stop that still works when the backend has
+forgotten the run (an API restart) — the result goes up with
+`stop_reason: cancelled`, which the backend doesn't alert.
+
+**Testing a run outside VS Code**: `claude.ts` imports `vscode` only for the
+binary lookup and the panel, so bundling it with esbuild and
+`--alias:vscode=<a stub module>` gives a node harness that drives
+`runClaudeHeadless` against the real CLI (the PATH fallback path). Run it
+with `env -i HOME=$HOME PATH=$PATH …`: inside a Claude Code session the
+`CLAUDE_CODE_*` variables make the child pass its permission questions up to
+the parent session, so commands get approved that a student's run refuses.
 
 **The toolchain bridge** (`src/toolchain.ts`, 0.2.13, capability `toolchain`).
 Installing the CLI tools a student is missing, instead of linking them to a
@@ -253,6 +299,7 @@ the first-token rule already accepts.
 |------------|-------|-------------|
 | `vscode-mosayic.signIn` | Sign in to Mosayic | Opens browser for OAuth login (2-min timeout) |
 | `vscode-mosayic.signOut` | Sign out of Mosayic | Clears session, disconnects WebSocket |
+| `vscode-mosayic.stopClaudeRuns` | Mosayic: Stop Claude | Stops every headless Claude run (the status bar's Claude item; 0.2.17) |
 
 ## Configuration Settings
 

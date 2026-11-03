@@ -2,7 +2,7 @@
   "name": "vscode-mosayic",
   "displayName": "Mosayic",
   "description": "Mosayic VS Code Extension",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "publisher": "mosayic",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -66,6 +66,10 @@
       {
         "command": "vscode-mosayic.checkDocker",
         "title": "Mosayic: Check Docker"
+      },
+      {
+        "command": "vscode-mosayic.stopClaudeRuns",
+        "title": "Mosayic: Stop Claude"
       }
     ],
     "menus": {

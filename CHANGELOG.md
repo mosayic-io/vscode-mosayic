@@ -4,6 +4,19 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.17] - 2026-11-03
+
+### Added
+- **Headless runs can be given limits and an allowlist** (capability `claude_limits`). `claude_run` now understands `allowed_tools` (Claude Code tool rules such as `Bash(git status *)`, for that run only), `max_turns`, `max_budget_usd`, `timeout_s` and `append_system_prompt`. Every value is checked and clamped here as well as in the backend, so a run can only ever be made tighter than the defaults (edits auto-accepted, everything else denied, thirty minutes), never looser. A run with none of them is the run it always was.
+- **A refused command is reported, not just denied.** Claude Code's refusal used to reach the student only if Claude happened to mention it. Each one now arrives as a `claude_output` line ("Not allowed from here: `npm install`") carrying `denial: {tool, command}`, and `claude_run_result` lists them all in `denials`, along with `stop_reason` (`max_turns` / `budget` / `timeout` / `cancelled`) and `cost_usd`.
+- **"Claude is working on … · Stop" in the status bar** while any headless run is going, and the `Mosayic: Stop Claude` command behind it. A run outlives the browser tab that started it and the backend can lose track of one (a restart), so VS Code now always shows it, with a Stop that kills it right here.
+
+### Fixed
+- **Stop and the time limit didn't stop anything when Claude ran from PATH.** That fallback starts `claude` through a shell, and only the shell was killed: Claude carried on underneath, writing files, until it was done. The run is now its own process group (`taskkill /T` on Windows) and the whole group goes.
+- **Headless runs never carried context.** Since 0.2.10 `claude_run`'s `session_id` / `resume` / `fork` were declared but never copied out of the incoming message, so every run started cold. They reach Claude now. A session Claude has never heard of (one picked before this fix, or from another folder) is retried cold once instead of failing the request.
+- A `$ command` line in the progress feed is shown once the command has run, not when Claude asks for it. It used to appear for commands the run refused too.
+- `claude -p` no longer waits three seconds for stdin at the start of every run.
+
 ## [0.2.16] - 2026-10-06
 
 ### Added

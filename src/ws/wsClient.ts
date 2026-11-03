@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { spawn } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { dirname, isAbsolute, relative, resolve as pathResolve } from 'path';
+import { basename, dirname, isAbsolute, relative, resolve as pathResolve } from 'path';
 import { WebSocket } from 'ws';
 import {
 	getApiUrl,
@@ -28,9 +28,22 @@ import {
 	installClaudeExtension,
 	openClaudePanel,
 	runClaudeHeadless,
+	sanitizeLimits,
+	denialLine,
 	type HeadlessRunSession,
 	type HeadlessRunHandle,
+	type HeadlessRunLimits,
 } from '../claude';
+
+/** A headless run in flight, as the status bar shows it. */
+export interface ClaudeRunInFlight {
+	requestId: string;
+	/** What the dashboard called it, e.g. "Studio prompt". */
+	label: string | null;
+	/** The folder it runs in, by name. */
+	folder: string;
+	startedAt: number;
+}
 
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const PING_INTERVAL = 30000;
@@ -82,7 +95,14 @@ const MEMBERSHIP_URL = 'https://kealy.studio';
 // a download page. The backend resolves which artifact; this side downloads,
 // verifies, unpacks, places and PATHs it. An older extension advertises
 // nothing here and keeps getting the links.
-const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions', 'toolchain'] as const;
+// ``claude_limits`` (0.2.17): ``claude_run`` understands ``allowed_tools`` /
+// ``max_turns`` / ``max_budget_usd`` / ``timeout_s`` / ``append_system_prompt``
+// (clamped here: a run can only be made tighter), streams a ``denial`` on
+// ``claude_output`` for anything the run refused, and reports ``stop_reason``,
+// ``cost_usd`` and ``denials`` on ``claude_run_result``. Also the release where
+// ``session_id`` / ``resume`` / ``fork`` really reach the run: from 0.2.10 to
+// 0.2.16 the message parser dropped them, so every run started cold.
+const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions', 'toolchain', 'claude_limits'] as const;
 
 export type WsState =
 	| 'signed-out'
@@ -114,7 +134,7 @@ type IncomingMessage =
 	| { type: 'claude_status'; request_id: string }
 	| { type: 'claude_install'; request_id: string }
 	| { type: 'claude_open'; request_id: string; prompt?: string; path?: string }
-	| { type: 'claude_run'; request_id: string; prompt: string; path: string; session_id?: string; resume?: string; fork?: boolean }
+	| { type: 'claude_run'; request_id: string; prompt: string; path: string; session_id?: string; resume?: string; fork?: boolean; limits: HeadlessRunLimits; label?: string }
 	| { type: 'toolchain_probe'; request_id: string; tools: ProbeSpec[]; managers: ManagerSpec[] }
 	| { type: 'toolchain_install'; request_id: string; plan: InstallPlan }
 	| { type: 'toolchain_remove'; request_id: string; key: string }
@@ -216,7 +236,16 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 			return undefined;
 		case 'claude_run':
 			if (isString(m.request_id) && isString(m.prompt) && isString(m.path)) {
-				return { type, request_id: m.request_id, prompt: m.prompt, path: m.path };
+				// The session fields were declared in 0.2.10 but never copied
+				// across here, so no run ever carried context until 0.2.17.
+				return {
+					type, request_id: m.request_id, prompt: m.prompt, path: m.path,
+					session_id: isString(m.session_id) ? m.session_id : undefined,
+					resume: isString(m.resume) ? m.resume : undefined,
+					fork: m.fork === true,
+					limits: sanitizeLimits(m),
+					label: isString(m.label) ? m.label.slice(0, 120) : undefined,
+				};
 			}
 			return undefined;
 		case 'toolchain_probe':
@@ -481,7 +510,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			claude_status: (m) => void this._claudeStatus(m.request_id),
 			claude_install: (m) => void this._claudeInstall(m.request_id),
 			claude_open: (m) => void this._claudeOpen(m.request_id, m.prompt, m.path),
-			claude_run: (m) => this._claudeRun(m.request_id, m.prompt, m.path, { sessionId: m.session_id, resume: m.resume, fork: m.fork }),
+			claude_run: (m) => this._claudeRun(m.request_id, m.prompt, m.path, { sessionId: m.session_id, resume: m.resume, fork: m.fork }, m.limits, m.label),
 			claude_cancel: (m) => this._claudeCancel(m.request_id),
 			toolchain_probe: (m) => void this._toolchainProbe(m.request_id, m.tools, m.managers),
 			toolchain_install: (m) => void this._toolchainInstall(m.request_id, m.plan),
@@ -494,8 +523,34 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	// ── Claude Code bridge ──────────────────────────────────────────
 
 	// Headless `claude -p` runs in flight, by request id, so the dashboard can
-	// cancel one and teardown can kill them all.
+	// cancel one, teardown can kill them all, and the status bar can show
+	// them with a Stop that works even when the backend has lost track.
 	private _claudeRuns = new Map<string, HeadlessRunHandle>();
+	private _claudeRunInfo = new Map<string, ClaudeRunInFlight>();
+	private _onClaudeRunsChange: ((runs: ClaudeRunInFlight[]) => void) | undefined;
+
+	/** Called with the runs in flight whenever one starts or ends. */
+	onClaudeRunsChange(cb: (runs: ClaudeRunInFlight[]) => void): void {
+		this._onClaudeRunsChange = cb;
+	}
+
+	get claudeRunsInFlight(): ClaudeRunInFlight[] {
+		return [...this._claudeRunInfo.values()];
+	}
+
+	/** Stop every run, from VS Code itself (the status bar's Stop). */
+	stopAllClaudeRuns(): number {
+		const count = this._claudeRuns.size;
+		for (const [requestId, handle] of this._claudeRuns) {
+			this._log(`Stopping claude run ${requestId} from VS Code`);
+			try { handle.cancel(); } catch { /* best-effort */ }
+		}
+		return count;
+	}
+
+	private _claudeRunsChanged(): void {
+		this._onClaudeRunsChange?.(this.claudeRunsInFlight);
+	}
 
 	private async _claudeStatus(requestId: string): Promise<void> {
 		const status = await getClaudeStatus((line) => this._log(line));
@@ -521,7 +576,10 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		this._sendJson({ type: 'claude_open_result', request_id: requestId, ...result });
 	}
 
-	private _claudeRun(requestId: string, prompt: string, path: string, session: HeadlessRunSession): void {
+	private _claudeRun(
+		requestId: string, prompt: string, path: string, session: HeadlessRunSession,
+		limits: HeadlessRunLimits = {}, label?: string,
+	): void {
 		const resolved = resolveFolderPath(path);
 		if ('error' in resolved) {
 			this._log(`DENIED claude_run in "${path}": ${resolved.error}`);
@@ -533,20 +591,44 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			});
 			return;
 		}
-		const handle = runClaudeHeadless(
+		const start = (runSession: HeadlessRunSession): HeadlessRunHandle => runClaudeHeadless(
 			prompt,
 			resolved.path,
 			(text) => this._sendJson({ type: 'claude_output', request_id: requestId, text }),
 			(result) => {
+				// Until 0.2.17 no session id ever reached Claude, so a dashboard
+				// may hold one Claude has never heard of (or one from another
+				// folder: sessions belong to the folder they ran in). Resuming
+				// it fails before any work starts; start cold instead, once,
+				// rather than fail the student's request over lost context.
+				if (
+					runSession.resume && result.exit_code !== 0 && !result.stop_reason
+					&& /no conversation found/i.test(result.error ?? '')
+					&& this._claudeRuns.has(requestId)
+				) {
+					this._log(`  session ${runSession.resume} is unknown to Claude here — starting cold`);
+					this._claudeRuns.set(requestId, start({}));
+					return;
+				}
 				this._claudeRuns.delete(requestId);
+				this._claudeRunInfo.delete(requestId);
+				this._claudeRunsChanged();
 				// `result` carries the session id and the run's own metrics; the
 				// dashboard resumes from the first and reports the rest.
 				this._sendJson({ type: 'claude_run_result', request_id: requestId, ...result });
 			},
 			(line) => this._log(line),
-			session,
+			runSession,
+			limits,
+			// A refusal travels as an ordinary progress line too, so a backend
+			// that doesn't know `denial` still shows the student something.
+			(denial) => this._sendJson({ type: 'claude_output', request_id: requestId, text: denialLine(denial), denial }),
 		);
-		this._claudeRuns.set(requestId, handle);
+		this._claudeRuns.set(requestId, start(session));
+		this._claudeRunInfo.set(requestId, {
+			requestId, label: label ?? null, folder: basename(resolved.path), startedAt: Date.now(),
+		});
+		this._claudeRunsChanged();
 	}
 
 	// ── Toolchain bridge ────────────────────────────────────────────
@@ -1419,6 +1501,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			try { handle.cancel(); } catch { /* best-effort */ }
 		}
 		this._claudeRuns.clear();
+		this._claudeRunInfo.clear();
 		for (const listener of this._activeTerminalListeners) {
 			try { listener.dispose(); } catch { /* best-effort */ }
 		}

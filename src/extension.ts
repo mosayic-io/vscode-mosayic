@@ -137,6 +137,45 @@ export function activate(context: vscode.ExtensionContext) {
 
 	wsClient.onStateChange(renderStatus);
 
+	// Claude working on the student's code, headless, from the dashboard. A
+	// run outlives the browser tab that asked for it, and the backend can lose
+	// track of one (a restart), so VS Code always shows it, with a Stop that
+	// kills the process right here.
+	const claudeBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+	claudeBar.name = 'Mosayic: Claude';
+	claudeBar.command = 'vscode-mosayic.stopClaudeRuns';
+	context.subscriptions.push(claudeBar);
+	wsClient.onClaudeRunsChange((runs) => {
+		if (!runs.length) {
+			claudeBar.hide();
+			return;
+		}
+		const names = runs.map((r) => r.folder);
+		claudeBar.text = runs.length === 1
+			? `$(loading~spin) Claude is working on ${names[0]} · Stop`
+			: `$(loading~spin) Claude is working (${runs.length}) · Stop`;
+		claudeBar.tooltip = `Claude Code is making changes for Mosayic in ${names.join(', ')}. Click to stop.`;
+		claudeBar.show();
+	});
+	context.subscriptions.push(
+		vscode.commands.registerCommand('vscode-mosayic.stopClaudeRuns', async () => {
+			const runs = wsClient.claudeRunsInFlight;
+			if (!runs.length) {
+				void vscode.window.showInformationMessage('Claude isn’t working on anything for Mosayic right now.');
+				return;
+			}
+			const where = runs.map((r) => r.folder).join(', ');
+			const choice = await vscode.window.showWarningMessage(
+				`Stop Claude? It’s working on ${where}. Anything it has already changed stays in your code.`,
+				{ modal: true },
+				'Stop',
+			);
+			if (choice === 'Stop') {
+				wsClient.stopAllClaudeRuns();
+			}
+		}),
+	);
+
 	// Make the output channel easy to open from the status bar
 	context.subscriptions.push(
 		vscode.commands.registerCommand('vscode-mosayic.showOutput', () => {

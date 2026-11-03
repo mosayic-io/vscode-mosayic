@@ -50,6 +50,19 @@ const INSTALL_SETTLE_TIMEOUT_MS = 60_000;
 // a few minutes, and it is the one holding the student's attention, not this.
 const HEADLESS_RUN_TIMEOUT_MS = 30 * 60_000;
 const MAX_PROMPT_CHARS = 8_000;
+// What the backend may ask a run to be held to (capability ``claude_limits``,
+// 0.2.17). Every value is clamped here as well as in the backend, because
+// these land in a process's argv: a run can be made SHORTER or more limited
+// than the defaults, never longer than the wall-clock kill above.
+const MIN_RUN_TIMEOUT_MS = 60_000;
+const MAX_TURNS_CAP = 500;
+const MAX_BUDGET_USD_CAP = 50;
+const MAX_ALLOWED_TOOLS = 40;
+const MAX_SYSTEM_PROMPT_CHARS = 4_000;
+// A tool rule as Claude Code writes them: a bare tool name (`Read`), or a
+// tool with a pattern in brackets (`Bash(git status *)`). No brackets inside
+// the pattern, no control characters.
+const TOOL_RULE_RE = /^[A-Za-z][A-Za-z0-9_]{0,40}(\([^()\u0000-\u001f]{1,160}\))?$/;
 
 export interface ClaudeStatus {
 	extension_installed: boolean;
@@ -325,6 +338,141 @@ function readResultMetrics(event: Record<string, unknown>): Partial<HeadlessRunR
 	};
 }
 
+/**
+ * What the backend may set on a run (0.2.17, capability ``claude_limits``).
+ * Each one is optional, and a run with none of them is exactly the run it
+ * always was: file edits auto-accepted, everything else denied, killed at
+ * thirty minutes.
+ *
+ *   `allowedTools`       — extra Claude Code tool rules, e.g. `Bash(git status *)`.
+ *                          Only what the backend names for THIS run; nothing
+ *                          becomes allowed for any other run.
+ *   `maxTurns`           — Claude stops after this many turns.
+ *   `maxBudgetUsd`       — Claude stops once the run has cost this much (its
+ *                          own estimate, which also counts on a subscription).
+ *   `timeoutMs`          — a shorter wall-clock kill than the thirty minutes.
+ *   `appendSystemPrompt` — told to Claude before the prompt: what it may and
+ *                          may not do from here.
+ */
+export interface HeadlessRunLimits {
+	allowedTools?: string[];
+	maxTurns?: number;
+	maxBudgetUsd?: number;
+	timeoutMs?: number;
+	appendSystemPrompt?: string;
+}
+
+/** Something Claude wanted to do that this run doesn't allow. */
+export interface HeadlessDenial {
+	tool: string;
+	/** For Bash: the command it wanted to run. */
+	command: string | null;
+}
+
+/** Why a run ended other than by finishing: a limit, or someone stopping it. */
+export type HeadlessStopReason = 'max_turns' | 'budget' | 'timeout' | 'cancelled';
+
+function finiteInRange(value: unknown, min: number, max: number): number | undefined {
+	return typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(value, min), max) : undefined;
+}
+
+/**
+ * The limits a run may really be given: anything malformed is dropped, not
+ * passed on, and numbers are clamped so the backend can only ever tighten a
+ * run. Exported for the message parser, which hands over raw JSON.
+ */
+export function sanitizeLimits(raw: Record<string, unknown>): HeadlessRunLimits {
+	const limits: HeadlessRunLimits = {};
+	if (Array.isArray(raw.allowed_tools)) {
+		const rules = raw.allowed_tools
+			.filter((r): r is string => typeof r === 'string' && TOOL_RULE_RE.test(r))
+			.slice(0, MAX_ALLOWED_TOOLS);
+		if (rules.length) { limits.allowedTools = rules; }
+	}
+	const turns = finiteInRange(raw.max_turns, 1, MAX_TURNS_CAP);
+	if (turns !== undefined) { limits.maxTurns = Math.round(turns); }
+	const budget = finiteInRange(raw.max_budget_usd, 0.05, MAX_BUDGET_USD_CAP);
+	if (budget !== undefined) { limits.maxBudgetUsd = Math.round(budget * 100) / 100; }
+	const timeoutS = finiteInRange(raw.timeout_s, MIN_RUN_TIMEOUT_MS / 1000, HEADLESS_RUN_TIMEOUT_MS / 1000);
+	if (timeoutS !== undefined) { limits.timeoutMs = Math.round(timeoutS * 1000); }
+	if (typeof raw.append_system_prompt === 'string' && raw.append_system_prompt.trim()) {
+		limits.appendSystemPrompt = raw.append_system_prompt.trim().slice(0, MAX_SYSTEM_PROMPT_CHARS);
+	}
+	return limits;
+}
+
+function limitArgs(limits: HeadlessRunLimits): string[] {
+	const args: string[] = [];
+	if (limits.allowedTools?.length) { args.push('--allowedTools', limits.allowedTools.join(',')); }
+	if (limits.maxTurns !== undefined) { args.push('--max-turns', String(limits.maxTurns)); }
+	if (limits.maxBudgetUsd !== undefined) { args.push('--max-budget-usd', limits.maxBudgetUsd.toFixed(2)); }
+	if (limits.appendSystemPrompt) { args.push('--append-system-prompt', limits.appendSystemPrompt); }
+	return args;
+}
+
+// How Claude Code words a refusal on the tool's own result. A command that
+// merely failed (an exit code, "Permission denied" from the OS) comes back
+// as an error too, so match only the refusal's own opening words; the
+// result event's `permission_denials` catches anything this misses.
+const DENIAL_TEXT_RE = /^\s*(this command requires approval|claude requested permissions? to use)/i;
+
+function toolResultText(content: unknown): string {
+	if (typeof content === 'string') { return content; }
+	if (Array.isArray(content)) {
+		return content
+			.map((part) => (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string' ? (part as { text: string }).text : ''))
+			.join(' ');
+	}
+	return '';
+}
+
+/** The progress line a refusal is shown as, for a dashboard that reads only text. */
+export function denialLine(denial: HeadlessDenial): string {
+	return denial.command
+		? `Not allowed from here: \`${denial.command.slice(0, 160)}\``
+		: `Not allowed from here: ${denial.tool}`;
+}
+
+/**
+ * Kill a headless run and everything under it. The PATH fallback runs
+ * `claude` through a shell, so `child.kill()` only killed the shell and
+ * Claude carried on underneath, writing files, until it was done — a Stop
+ * or a time limit that did nothing (found 2026-11-03). On macOS and Linux
+ * the run is its own process group (`detached` at spawn) and the whole group
+ * goes; on Windows `taskkill /T` takes the tree.
+ */
+function killTree(child: ChildProcess): void {
+	if (child.pid === undefined) {
+		child.kill();
+		return;
+	}
+	if (process.platform === 'win32') {
+		try {
+			spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+				.on('error', () => child.kill());
+		} catch {
+			child.kill();
+		}
+		return;
+	}
+	try {
+		process.kill(-child.pid, 'SIGTERM');
+	} catch {
+		child.kill();
+	}
+}
+
+function minutes(ms: number): string {
+	const m = Math.round(ms / 60_000);
+	return m === 1 ? 'a minute' : `${m} minutes`;
+}
+
+function stopReasonOf(event: Record<string, unknown>): HeadlessStopReason | null {
+	if (event.subtype === 'error_max_turns') { return 'max_turns'; }
+	if (event.subtype === 'error_max_budget_usd') { return 'budget'; }
+	return null;
+}
+
 function describeStreamEvent(event: Record<string, unknown>, cwd: string): string[] {
 	const lines: string[] = [];
 	if (event.type === 'assistant') {
@@ -344,14 +492,23 @@ function describeStreamEvent(event: Record<string, unknown>, cwd: string): strin
 					lines.push(`Reading ${rel ?? 'a file'}`);
 				} else if (name === 'Glob' || name === 'Grep') {
 					lines.push('Looking through the project…');
-				} else if (name === 'Bash' && typeof input.command === 'string') {
-					lines.push(`$ ${input.command.slice(0, 120)}`);
 				}
+				// Bash is described once its result is in (runClaudeHeadless):
+				// a `$ command` line shown on the request read as "it ran",
+				// including for the ones the run refused.
 			}
 		}
 	} else if (event.type === 'result') {
 		const isError = event.is_error === true || (typeof event.subtype === 'string' && event.subtype !== 'success');
-		if (isError) {
+		const reason = stopReasonOf(event);
+		if (reason === 'max_turns') {
+			lines.push('Claude stopped: it reached the step limit for this request.');
+		} else if (reason === 'budget') {
+			lines.push('Claude stopped: it reached the spending limit for this request.');
+		} else if (Array.isArray(event.errors) && event.errors.some((e) => typeof e === 'string' && /no conversation found/i.test(e))) {
+			// A session Claude doesn't know: the bridge starts the run cold
+			// instead (wsClient), so this is not the end of anything.
+		} else if (isError) {
 			const detail = typeof event.result === 'string' ? event.result : String(event.subtype ?? 'error');
 			lines.push(`Claude stopped: ${detail.slice(0, 300)}`);
 		}
@@ -398,6 +555,12 @@ export interface HeadlessRunResult {
 	output_tokens: number | null;
 	/** Tokens served from the prompt cache — near zero means the run started cold. */
 	cache_read_tokens: number | null;
+	/** Why it ended early, when it did (0.2.17): a limit, or a stop. Null when it finished. */
+	stop_reason?: HeadlessStopReason | null;
+	/** Claude's own estimate of what the run cost, in US dollars (0.2.17). */
+	cost_usd?: number | null;
+	/** Everything the run refused (0.2.17), from Claude's own list at the end. */
+	denials?: HeadlessDenial[];
 }
 
 /**
@@ -415,6 +578,8 @@ export function runClaudeHeadless(
 	onDone: (result: HeadlessRunResult) => void,
 	log: (line: string) => void,
 	session: HeadlessRunSession = {},
+	limits: HeadlessRunLimits = {},
+	onDenial: (denial: HeadlessDenial) => void = () => undefined,
 ): HeadlessRunHandle {
 	const binary = findClaudeBinary();
 	const trimmed = prompt.trim().slice(0, MAX_PROMPT_CHARS);
@@ -445,16 +610,26 @@ export function runClaudeHeadless(
 		'--output-format', 'stream-json',
 		'--verbose',
 		...sessionArgs,
+		...limitArgs(limits),
 	]);
-	log(`claude -p (${binary.kind}) in ${cwd}${sessionArgs.length ? ` [${sessionArgs.join(' ')}]` : ''}: ${trimmed.slice(0, 80)}`);
+	const timeoutMs = limits.timeoutMs ?? HEADLESS_RUN_TIMEOUT_MS;
+	log(
+		`claude -p (${binary.kind}) in ${cwd}${sessionArgs.length ? ` [${sessionArgs.join(' ')}]` : ''}`
+		+ ` [turns=${limits.maxTurns ?? '-'} budget=${limits.maxBudgetUsd ?? '-'} timeout=${Math.round(timeoutMs / 1000)}s`
+		+ ` allowed=${limits.allowedTools?.length ?? 0}]: ${trimmed.slice(0, 80)}`,
+	);
 
 	let child: ChildProcess;
 	try {
 		child = spawn(spec.command, spec.args, {
 			shell: spec.shell,
 			cwd,
-			timeout: HEADLESS_RUN_TIMEOUT_MS,
 			env: toolchainEnv(),
+			// Nothing is ever piped in. Left open, `claude -p` waits three
+			// seconds for stdin on every run before it starts.
+			stdio: ['ignore', 'pipe', 'pipe'],
+			// Its own process group, so a stop takes the whole run (killTree).
+			detached: process.platform !== 'win32',
 		});
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
@@ -470,11 +645,71 @@ export function runClaudeHeadless(
 	// id is one we never chose, and it is the id a repair run has to resume.
 	let sessionId: string | null = session.resume && !session.fork ? session.resume : (session.sessionId ?? null);
 	let metrics: Partial<HeadlessRunResult> = {};
+	let stopReason: HeadlessStopReason | null = null;
+	let costUsd: number | null = null;
+	// The tools Claude asked for, by id, so a result can be told apart: a Bash
+	// command that ran gets its `$` line, one the run refused is a denial.
+	const toolCalls = new Map<string, { name: string; command: string | null }>();
+	const denials: HeadlessDenial[] = [];
+	const deniedIds = new Set<string>();
+	const deny = (id: string | null, denial: HeadlessDenial) => {
+		if (id && deniedIds.has(id)) { return; }
+		if (id) { deniedIds.add(id); }
+		denials.push(denial);
+		log(`  claude -p refused: ${denial.tool}${denial.command ? ` ${denial.command.slice(0, 120)}` : ''}`);
+		onDenial(denial);
+	};
 	let done = false;
+	let wallClock: ReturnType<typeof setTimeout> | undefined;
 	const finish = (exitCode: number, error: string | null) => {
 		if (done) { return; }
 		done = true;
-		onDone({ ...blank, ...metrics, exit_code: exitCode, result_text: resultText, error, session_id: sessionId });
+		clearTimeout(wallClock);
+		onDone({
+			...blank, ...metrics, exit_code: exitCode, result_text: resultText, error, session_id: sessionId,
+			stop_reason: stopReason, cost_usd: costUsd, denials,
+		});
+	};
+
+	const contentOf = (event: Record<string, unknown>): Array<Record<string, unknown>> => {
+		const message = event.message as { content?: unknown } | undefined;
+		return Array.isArray(message?.content) ? message.content as Array<Record<string, unknown>> : [];
+	};
+
+	const noteToolUse = (event: Record<string, unknown>) => {
+		for (const block of contentOf(event)) {
+			if (block.type !== 'tool_use' || typeof block.id !== 'string') { continue; }
+			const input = (block.input ?? {}) as Record<string, unknown>;
+			toolCalls.set(block.id, {
+				name: typeof block.name === 'string' ? block.name : 'tool',
+				command: typeof input.command === 'string' ? input.command : null,
+			});
+		}
+	};
+
+	const noteToolResults = (event: Record<string, unknown>) => {
+		for (const block of contentOf(event)) {
+			if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') { continue; }
+			const call = toolCalls.get(block.tool_use_id);
+			if (!call) { continue; }
+			if (block.is_error === true && DENIAL_TEXT_RE.test(toolResultText(block.content))) {
+				deny(block.tool_use_id, { tool: call.name, command: call.command });
+			} else if (call.name === 'Bash' && call.command) {
+				onLine(`$ ${call.command.slice(0, 120)}`);
+			}
+		}
+	};
+
+	const noteFinalDenials = (event: Record<string, unknown>) => {
+		if (!Array.isArray(event.permission_denials)) { return; }
+		for (const raw of event.permission_denials as Array<Record<string, unknown>>) {
+			if (!raw || typeof raw !== 'object') { continue; }
+			const input = (raw.tool_input ?? {}) as Record<string, unknown>;
+			deny(typeof raw.tool_use_id === 'string' ? raw.tool_use_id : null, {
+				tool: typeof raw.tool_name === 'string' ? raw.tool_name : 'tool',
+				command: typeof input.command === 'string' ? input.command : null,
+			});
+		}
 	};
 
 	const handleLine = (line: string) => {
@@ -488,14 +723,37 @@ export function runClaudeHeadless(
 		if (typeof event.session_id === 'string' && event.session_id) {
 			sessionId = event.session_id;
 		}
-		if (event.type === 'result') {
+		if (event.type === 'assistant') {
+			noteToolUse(event);
+		} else if (event.type === 'user') {
+			noteToolResults(event);
+		} else if (event.type === 'result') {
 			if (typeof event.result === 'string') { resultText = event.result; }
 			metrics = readResultMetrics(event);
+			stopReason = stopReasonOf(event) ?? stopReason;
+			costUsd = num(event.total_cost_usd);
+			noteFinalDenials(event);
 		}
 		for (const text of describeStreamEvent(event, cwd)) {
 			onLine(text);
 		}
 	};
+
+	// Our own wall clock rather than spawn's `timeout`, so the result can say
+	// that this is why the run ended.
+	let killing = false;
+	const stop = (reason: HeadlessStopReason) => {
+		if (done || killing) { return; }
+		killing = true;
+		stopReason = stopReason ?? reason;
+		killTree(child);
+	};
+	wallClock = setTimeout(() => {
+		if (done || killing) { return; }
+		log(`  claude -p hit its ${Math.round(timeoutMs / 1000)}s limit — stopping it`);
+		onLine(`Claude stopped: it ran for ${minutes(timeoutMs)}, the time limit for this request.`);
+		stop('timeout');
+	}, timeoutMs);
 
 	child.stdout?.on('data', (chunk: Buffer) => {
 		buffer += chunk.toString();
@@ -520,7 +778,9 @@ export function runClaudeHeadless(
 			+ ` ${metrics.duration_ms != null ? `${Math.round(metrics.duration_ms / 1000)}s` : '?s'}`
 			+ ` turns=${metrics.num_turns ?? '?'}`
 			+ ` in=${metrics.input_tokens ?? '?'} out=${metrics.output_tokens ?? '?'}`
-			+ ` cached=${metrics.cache_read_tokens ?? '?'}`,
+			+ ` cached=${metrics.cache_read_tokens ?? '?'}`
+			+ ` cost=${costUsd != null ? `$${costUsd.toFixed(2)}` : '?'}`
+			+ ` stop=${stopReason ?? '-'} refused=${denials.length}`,
 		);
 		finish(exitCode, exitCode === 0 ? null : (stderr.trim().slice(0, 500) || `claude exited with code ${exitCode}`));
 	});
@@ -530,10 +790,6 @@ export function runClaudeHeadless(
 	});
 
 	return {
-		cancel: () => {
-			if (!child.killed) {
-				child.kill();
-			}
-		},
+		cancel: () => stop('cancelled'),
 	};
 }
