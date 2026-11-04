@@ -3,8 +3,8 @@ import { spawn, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { toolchainEnv } from './toolchain';
-import { gitBashPath, resolveShellChoice, terminalShellOptions } from './shell';
+import { mosayicTerminalOptions, toolchainEnv } from './toolchain';
+import { gitBashPath, resolveShellChoice } from './shell';
 
 /**
  * The environment every `claude` process gets: our PATH, and on Windows
@@ -316,8 +316,8 @@ export async function openClaudePanel(
 			name: 'Claude Code',
 			cwd: cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? homedir(),
 			iconPath: new vscode.ThemeIcon('sparkle'),
-			// Git Bash on Windows: the line typed below is POSIX-quoted (shell.ts).
-			...terminalShellOptions(),
+			// Git Bash on Windows (the line typed below is POSIX-quoted) and our PATH.
+			...mosayicTerminalOptions(),
 		});
 		terminal.show();
 		const exe = binary?.kind === 'bundled' ? shellQuote(binary.command) : `${sourceNvm()}claude`;

@@ -269,9 +269,19 @@ only read by a NEW shell, `toolchainEnv()` prepends the managed directories at
 every spawn site (relayed commands, terminals, dev servers, Claude runs, the
 Docker probe) so a tool installed one step ago works in the next one.
 
+**Windows' live PATH** (0.2.20, `registryPathDirs` in `toolchain.ts`): a
+Windows process keeps the PATH it started with, so anything installed by its
+own installer while VS Code was open (Docker Desktop, gcloud, gh's .msi, Git,
+nvm-windows) was invisible until every VS Code window was quit.
+`toolchainEnv()` now also reads the machine + user `Path` from the registry
+(`reg query`, `%VAR%` expanded, cached 30 s) and APPENDS what's new, compared
+case-insensitively, so the student's order wins; ours still go first.
+
 **Mosayic's terminals are Git Bash on Windows** (0.2.19, `terminalShellOptions`
-in `shell.ts`). Every `createTerminal` that types a backend command
-(`wsClient._runInTerminal`, `claude.ts`'s terminal fallback) spreads it in:
+in `shell.ts`; since 0.2.20 through `mosayicTerminalOptions` in
+`toolchain.ts`, which also gives them `toolchainEnv`'s PATH). Every
+`createTerminal` that types a backend command (`wsClient._runInTerminal`,
+`claude.ts`'s terminal fallback) spreads it in:
 `shellPath` = Git Bash, `--login -i`, `CHERE_INVOKING=1` (stay in the
 terminal's cwd). Without it they opened in the default profile, PowerShell,
 which can't run the POSIX one-liners the backend sends. The student's

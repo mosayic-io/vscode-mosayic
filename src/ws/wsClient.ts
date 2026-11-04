@@ -11,9 +11,10 @@ import {
 	isAllowlistedCommand,
 } from '../config';
 import type { RefreshOutcome } from '../auth/authProvider';
-import { resolveShellChoice, terminalShellOptions } from '../shell';
+import { resolveShellChoice } from '../shell';
 import {
 	installTool,
+	mosayicTerminalOptions,
 	probeToolchain,
 	removeManagedTool,
 	toolchainEnv,
@@ -1153,8 +1154,8 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				name: terminalName,
 				cwd: terminalCwd,
 				iconPath: new vscode.ThemeIcon('rocket'),
-				// Git Bash on Windows: the command below is POSIX (shell.ts).
-				...terminalShellOptions(),
+				// Git Bash on Windows (the command below is POSIX) and our PATH.
+				...mosayicTerminalOptions(),
 			});
 			terminal.show();
 			terminal.sendText(command);

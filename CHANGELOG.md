@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.20] - 2026-11-04
+
+### Fixed
+- **On Windows, a tool you install while VS Code is open is found straight away.** Windows gives every program a copy of PATH when it starts, and VS Code keeps the copy it started with. So Docker Desktop, the Google Cloud CLI, the GitHub CLI or Git installed by their own installers stayed "not installed" to Mosayic until you quit every VS Code window. Mosayic now reads the current PATH from Windows itself (machine and user) and adds whatever is new to everything it runs. Your own order of PATH entries is kept.
+- **Mosayic's terminals get the same PATH as everything else Mosayic runs.** A Node that Mosayic had just installed, or a tool installed while VS Code was open, could be "not found" in the dev-server or build terminal until VS Code restarted. On every platform.
+
 ## [0.2.19] - 2026-11-04
 
 ### Fixed

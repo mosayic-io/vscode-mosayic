@@ -24,13 +24,14 @@
  * and from which URL — so `toolchain_remove` can be honest about what it will
  * delete, and so a tool the student installed themselves is never touched.
  */
-import { spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { cpSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
 import { get as httpsGet } from 'https';
 import { homedir, tmpdir } from 'os';
 import { delimiter, dirname, join } from 'path';
-import { resolveShellChoice } from './shell';
+import type * as vscode from 'vscode';
+import { resolveShellChoice, terminalShellOptions } from './shell';
 
 /** What the backend asks us to check. */
 export interface ProbeSpec { key: string; command: string; binary: string }
@@ -115,24 +116,103 @@ export function managedBinDirs(): string[] {
 		.filter((dir) => typeof dir === 'string' && dir.length > 0 && existsSync(dir));
 }
 
+// ── Windows: the PATH a restarted VS Code would see ──────────────────────
+// A Windows process gets a COPY of PATH when it starts, and VS Code's
+// extension host keeps that copy. So a tool whose own installer adds it to
+// PATH after VS Code was opened (Docker Desktop, gcloud, gh's .msi, Git for
+// Windows, nvm-windows) stays "not installed" to everything Mosayic runs
+// until the student quits every VS Code window, and nobody guesses that
+// (0.2.20). The registry holds the live value, machine and user, so read it
+// and add whatever is new. Cached for 30 s: it's read on every spawn.
+const REGISTRY_PATH_KEYS = [
+	'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment',
+	'HKCU\\Environment',
+];
+let registryPathCache: { at: number; dirs: string[] } | null = null;
+
+function expandWindowsVars(value: string): string {
+	return value.replace(/%([^%]+)%/g, (all, name: string) => {
+		const key = Object.keys(process.env).find((k) => k.toLowerCase() === name.toLowerCase());
+		return key ? (process.env[key] ?? all) : all;
+	});
+}
+
+/** Machine + user PATH as the registry has it now. Windows only; [] elsewhere or on any failure. */
+export function registryPathDirs(): string[] {
+	if (process.platform !== 'win32') { return []; }
+	if (registryPathCache && Date.now() - registryPathCache.at < 30_000) { return registryPathCache.dirs; }
+	const dirs: string[] = [];
+	for (const key of REGISTRY_PATH_KEYS) {
+		try {
+			const out = execFileSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8', timeout: 3000, windowsHide: true });
+			const value = /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(out)?.[1]?.trim();
+			if (value) { dirs.push(...expandWindowsVars(value).split(';').map((d) => d.trim()).filter(Boolean)); }
+		} catch {
+			// No user Path yet, or reg refused: nothing to add from it.
+		}
+	}
+	registryPathCache = { at: Date.now(), dirs };
+	return dirs;
+}
+
+/** PATH entries compared the way the platform compares them. */
+function sameDirKey(dir: string): string {
+	return process.platform === 'win32' ? dir.replace(/[\\/]+$/, '').toLowerCase() : dir;
+}
+
 /**
- * `process.env` with the managed tools on PATH.
+ * `process.env` with the managed tools on PATH, and on Windows whatever the
+ * registry's PATH has gained since VS Code started (`registryPathDirs`).
  *
  * Used by every place the extension spawns something, because a student's
  * shell profile is only re-read by a NEW shell: without this, a tool we
  * installed two seconds ago is invisible until VS Code restarts, and the
- * install looks like it failed.
+ * install looks like it failed. Ours go FIRST (the copy Mosayic just put
+ * there), the registry's new entries LAST (only what isn't there already,
+ * so the order the student had wins).
  */
 export function toolchainEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	const dirs = managedBinDirs();
-	if (dirs.length === 0) { return base; }
+	const fresh = registryPathDirs();
+	if (dirs.length === 0 && fresh.length === 0) { return base; }
 	// Windows' env keys are case-insensitive but Node's object is not, so find
 	// the real key rather than assuming "PATH".
 	const key = Object.keys(base).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
 	const current = base[key] ?? '';
-	const missing = dirs.filter((dir) => !current.split(delimiter).includes(dir));
-	if (missing.length === 0) { return base; }
-	return { ...base, [key]: [...missing, current].filter(Boolean).join(delimiter) };
+	const have = new Set(current.split(delimiter).filter(Boolean).map(sameDirKey));
+	const front = dirs.filter((dir) => {
+		const k = sameDirKey(dir);
+		if (have.has(k)) { return false; }
+		have.add(k);
+		return true;
+	});
+	const back = fresh.filter((dir) => {
+		const k = sameDirKey(dir);
+		if (have.has(k)) { return false; }
+		have.add(k);
+		return true;
+	});
+	if (front.length === 0 && back.length === 0) { return base; }
+	return { ...base, [key]: [...front, current, ...back].filter(Boolean).join(delimiter) };
+}
+
+/**
+ * Everything a terminal Mosayic opens for the student needs (0.2.20): Git
+ * Bash on Windows (`terminalShellOptions`), and the PATH every other spawn
+ * gets. Before this, a Node Mosayic had just installed, or a Docker / gcloud
+ * installed while VS Code was open, was "not found" in the dev-server or
+ * build terminal until VS Code was restarted. VS Code adds `env` to its own
+ * environment, so only PATH is replaced, and only when it changed.
+ */
+export function mosayicTerminalOptions(): Pick<vscode.TerminalOptions, 'shellPath' | 'shellArgs' | 'env'> {
+	const shell = terminalShellOptions();
+	const base = process.env;
+	const env = toolchainEnv(base);
+	const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
+	const extra: Record<string, string> = {};
+	if (env !== base && env[key]) { extra[key] = env[key]; }
+	const merged = { ...(shell.env ?? {}), ...extra };
+	return { ...shell, ...(Object.keys(merged).length ? { env: merged } : {}) };
 }
 
 interface RunResult { exitCode: number | null; stdout: string; stderr: string }
