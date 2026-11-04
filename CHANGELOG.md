@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.19] - 2026-11-04
+
+### Fixed
+- **On Windows, Mosayic's terminals open in Git Bash.** The terminals Mosayic opens for you to watch (your app's dev server, a development build, Claude Code, a command Claude asked for) used to open in VS Code's default shell, which on Windows is PowerShell, and the commands Mosayic types into them are written for Bash (`cd '…' && npx expo start`). Windows PowerShell can't run those, so unless you had changed VS Code's default terminal to Git Bash yourself, every one of them failed. They now open in Git Bash, the same shell Mosayic already runs its own commands in. Your own terminals and your default terminal profile are left exactly as you set them. With `mosayic.windowsShell` set to `pwsh` or `cmd`, or no Git Bash on the machine, nothing changes.
+- **Claude Code is told where Git Bash is.** Claude Code on Windows needs Git Bash and usually finds it through git on your PATH. Every `claude` process Mosayic starts now also gets `CLAUDE_CODE_GIT_BASH_PATH` set to the Git Bash Mosayic found, so a Git that Mosayic installed a moment ago works before your PATH has caught up. A value you set yourself is kept.
+
 ## [0.2.18] - 2026-11-04
 
 ### Security

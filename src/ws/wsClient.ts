@@ -11,7 +11,7 @@ import {
 	isAllowlistedCommand,
 } from '../config';
 import type { RefreshOutcome } from '../auth/authProvider';
-import { resolveShellChoice } from '../shell';
+import { resolveShellChoice, terminalShellOptions } from '../shell';
 import {
 	installTool,
 	probeToolchain,
@@ -1153,6 +1153,8 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				name: terminalName,
 				cwd: terminalCwd,
 				iconPath: new vscode.ThemeIcon('rocket'),
+				// Git Bash on Windows: the command below is POSIX (shell.ts).
+				...terminalShellOptions(),
 			});
 			terminal.show();
 			terminal.sendText(command);

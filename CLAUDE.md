@@ -269,6 +269,18 @@ only read by a NEW shell, `toolchainEnv()` prepends the managed directories at
 every spawn site (relayed commands, terminals, dev servers, Claude runs, the
 Docker probe) so a tool installed one step ago works in the next one.
 
+**Mosayic's terminals are Git Bash on Windows** (0.2.19, `terminalShellOptions`
+in `shell.ts`). Every `createTerminal` that types a backend command
+(`wsClient._runInTerminal`, `claude.ts`'s terminal fallback) spreads it in:
+`shellPath` = Git Bash, `--login -i`, `CHERE_INVOKING=1` (stay in the
+terminal's cwd). Without it they opened in the default profile, PowerShell,
+which can't run the POSIX one-liners the backend sends. The student's
+`terminal.integrated.defaultProfile.windows` is deliberately NOT touched
+(John: their own terminals are theirs). It follows `mosayic.windowsShell` like
+relayed commands do. Every `claude` spawn gets `CLAUDE_CODE_GIT_BASH_PATH`
+(`claudeEnv` in `claude.ts`) unless the student set one. Not yet run on a
+real Windows machine.
+
 ## Command Execution
 
 When a `command` message arrives (`wsClient.ts:153-217`):

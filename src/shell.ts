@@ -127,3 +127,36 @@ export function resolveShellChoice(): ShellChoice {
 export function resolveCommandShell(): string | boolean {
 	return resolveShellChoice().shell;
 }
+
+/**
+ * Git Bash's bash.exe on Windows (wherever findGitBash finds it), else null.
+ * Regardless of `mosayic.windowsShell`: this is for programs that need Git
+ * Bash themselves (Claude Code on Windows does), not for how Mosayic runs
+ * its own commands.
+ */
+export function gitBashPath(): string | null {
+	return process.platform === 'win32' ? findGitBash() : null;
+}
+
+/**
+ * The shell for every terminal Mosayic opens (0.2.19, John 2026-11-04). The
+ * commands typed into them come from the backend and are POSIX (`cd '…' &&
+ * npx expo start`), which PowerShell, Windows' default terminal, can't run:
+ * Windows PowerShell doesn't even know `&&`. So on Windows, Mosayic's own
+ * terminals open in Git Bash, the same shell its relayed commands use. The
+ * student's default terminal profile is deliberately left alone: their own
+ * terminals stay whatever they chose.
+ *
+ * `--login -i` is what VS Code's own Git Bash profile passes (Git's
+ * /etc/profile sets up PATH and the prompt); CHERE_INVOKING keeps a login
+ * shell in the terminal's `cwd` instead of moving to $HOME.
+ *
+ * Follows the same preference as relayed commands, so `mosayic.windowsShell`
+ * set to `pwsh` or `cmd` keeps the old behaviour (the default profile).
+ * Off Windows, or without Git Bash, it adds nothing.
+ */
+export function terminalShellOptions(): Pick<vscode.TerminalOptions, 'shellPath' | 'shellArgs' | 'env'> {
+	const choice = resolveShellChoice();
+	if (choice.kind !== 'gitbash' || typeof choice.shell !== 'string') { return {}; }
+	return { shellPath: choice.shell, shellArgs: ['--login', '-i'], env: { CHERE_INVOKING: '1' } };
+}

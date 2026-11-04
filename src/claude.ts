@@ -3,8 +3,23 @@ import { spawn, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { resolveShellChoice } from './shell';
 import { toolchainEnv } from './toolchain';
+import { gitBashPath, resolveShellChoice, terminalShellOptions } from './shell';
+
+/**
+ * The environment every `claude` process gets: our PATH, and on Windows
+ * where Git Bash is (0.2.19). Claude Code on Windows needs Git Bash and
+ * normally finds it through git on PATH; telling it the path Mosayic already
+ * found (`CLAUDE_CODE_GIT_BASH_PATH`, Claude Code's documented setting) covers
+ * a PortableGit Mosayic installed a step ago, before any PATH change has
+ * reached this process. A value the student set themselves wins.
+ */
+function claudeEnv(): NodeJS.ProcessEnv {
+	const env = toolchainEnv();
+	const bash = gitBashPath();
+	if (!bash || env.CLAUDE_CODE_GIT_BASH_PATH) { return env; }
+	return { ...env, CLAUDE_CODE_GIT_BASH_PATH: bash };
+}
 
 /**
  * The Claude Code bridge.
@@ -156,7 +171,7 @@ function runCaptured(
 				shell: spec.shell,
 				cwd: opts.cwd,
 				timeout: opts.timeoutMs,
-				env: toolchainEnv(),
+				env: claudeEnv(),
 			});
 		} catch (err) {
 			finish(1, err instanceof Error ? err.message : String(err));
@@ -301,6 +316,8 @@ export async function openClaudePanel(
 			name: 'Claude Code',
 			cwd: cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? homedir(),
 			iconPath: new vscode.ThemeIcon('sparkle'),
+			// Git Bash on Windows: the line typed below is POSIX-quoted (shell.ts).
+			...terminalShellOptions(),
 		});
 		terminal.show();
 		const exe = binary?.kind === 'bundled' ? shellQuote(binary.command) : `${sourceNvm()}claude`;
@@ -624,7 +641,7 @@ export function runClaudeHeadless(
 		child = spawn(spec.command, spec.args, {
 			shell: spec.shell,
 			cwd,
-			env: toolchainEnv(),
+			env: claudeEnv(),
 			// Nothing is ever piped in. Left open, `claude -p` waits three
 			// seconds for stdin on every run before it starts.
 			stdio: ['ignore', 'pipe', 'pipe'],
