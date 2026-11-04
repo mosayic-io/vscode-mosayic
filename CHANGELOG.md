@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.18] - 2026-11-04
+
+### Security
+- **A hand-off link must name the account.** A `vscode://mosayic.vscode-mosayic/handoff` link without an `email` used to skip the account check, and the confirm dialog only said "your Mosayic account". Someone could mint a code for their own account, send the link, and a click on Connect signed this VS Code into their account, which then let their dashboard run commands on this computer. Every Mosayic dashboard sends the email, so a link without one is now refused, and the exchange holds the minted session to that email without exception.
+- The confirm dialog now says to continue only if the named email is yours, and that connecting someone else's link lets their account run commands here.
+
 ## [0.2.17] - 2026-11-03
 
 ### Added

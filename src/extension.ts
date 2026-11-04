@@ -346,7 +346,22 @@ export function activate(context: vscode.ExtensionContext) {
 				log('Hand-off URI arrived without a code — ignoring.');
 				return;
 			}
-			const who = emailHint || 'your Mosayic account';
+			// Every dashboard names the account (2026-11-04: mosayue, the
+			// academy and the studio all do). A link without one is refused,
+			// because the email is what the student checks in the dialog below
+			// and what createSessionFromHandoff holds the minted session to —
+			// without it, a link someone else minted for THEIR account would
+			// read "connect as your Mosayic account" and sign this VS Code into
+			// it, and that person's dashboard could then run commands here.
+			if (!emailHint) {
+				log('Hand-off refused: the link names no account.');
+				void vscode.window.showErrorMessage(
+					'This Mosayic sign-in link doesn\'t say which account it\'s for, so it was ignored. ' +
+					'Click "Connect VS Code" on your own Mosayic dashboard to sign in.',
+				);
+				return;
+			}
+			const who = emailHint;
 			const currentEnv = getEnvironment();
 			const currentApi = getApiUrl();
 			const describe = (env: Environment, url: string) => `${environmentLabel(env)} (${url})`;
@@ -377,7 +392,9 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			const connect = switchTo ? 'Switch and connect' : 'Connect';
-			const csrfLine = 'Only continue if you just clicked "Connect VS Code" on the Mosayic dashboard.';
+			const csrfLine =
+				`Only continue if ${who} is YOUR account and you just clicked "Connect VS Code" on your own Mosayic dashboard. ` +
+				'If someone sent you this link, cancel: connecting would let their Mosayic account run commands on this computer.';
 			let title: string;
 			let detail: string;
 			if (switchTo) {

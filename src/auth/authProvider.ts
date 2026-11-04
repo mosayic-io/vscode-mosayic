@@ -73,9 +73,9 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 	 * the code for a session of our own — no browser round-trip, no second
 	 * Google sign-in, and by construction the same account as the dashboard.
 	 *
-	 * `emailHint` is the address the dashboard put in the URI. It's a display
-	 * hint, not a credential: the session the backend mints is the truth, and
-	 * if it belongs to anyone else the hand-off is refused — a crafted link
+	 * `emailHint` is the address the dashboard put in the URI, and it is
+	 * required. It's not a credential: the session the backend mints is the
+	 * truth, and if it belongs to anyone else the hand-off is refused — a crafted link
 	 * can't sign this VS Code into an account the student didn't see named.
 	 * Replaces whatever session was stored (one account at a time).
 	 */
@@ -103,7 +103,9 @@ export class MosayicAuthenticationProvider implements vscode.AuthenticationProvi
 			throw new Error('Incomplete authentication data received');
 		}
 		const email = data.email ?? '';
-		if (emailHint && email.toLowerCase() !== emailHint.toLowerCase()) {
+		// Strict: the hand-off command refuses a link with no email before it
+		// gets here, and an empty hint must never mean "any account".
+		if (!emailHint || email.toLowerCase() !== emailHint.toLowerCase()) {
 			throw new Error(`the sign-in code belonged to ${email || 'a different account'}, not ${emailHint}`);
 		}
 
