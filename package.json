@@ -2,7 +2,7 @@
   "name": "vscode-mosayic",
   "displayName": "Mosayic",
   "description": "Mosayic VS Code Extension",
-  "version": "0.2.20",
+  "version": "0.2.21",
   "publisher": "mosayic",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -31,6 +31,18 @@
   "categories": [
     "Other"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Mosayic keeps its connection while VS Code asks whether to trust a folder it opened for you. In a folder you haven't trusted, that folder's own settings can't change which Mosayic server is used or when commands are confirmed.",
+      "restrictedConfigurations": [
+        "mosayic.environment",
+        "mosayic.apiUrl",
+        "mosayic.confirmCommands",
+        "mosayic.windowsShell"
+      ]
+    }
+  },
   "activationEvents": [
     "onStartupFinished"
   ],

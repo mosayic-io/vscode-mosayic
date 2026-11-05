@@ -103,7 +103,7 @@ const MEMBERSHIP_URL = 'https://kealy.studio';
 // ``cost_usd`` and ``denials`` on ``claude_run_result``. Also the release where
 // ``session_id`` / ``resume`` / ``fork`` really reach the run: from 0.2.10 to
 // 0.2.16 the message parser dropped them, so every run started cold.
-const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions', 'toolchain', 'claude_limits'] as const;
+const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions', 'toolchain', 'claude_limits', 'attention'] as const;
 
 export type WsState =
 	| 'signed-out'
@@ -461,6 +461,16 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	// Session-scoped "allow all" choice. Re-enabled on sign-out or extension
 	// reload, and via the ``Mosayic: Reset Command Prompts`` command.
 	private _sessionAllowAll = false;
+	/**
+	 * "VS Code needs you" (0.2.21, capability `attention`). Whatever is waiting
+	 * on the person HERE (a command to allow, the folder picker, the trust
+	 * question) is told to the backend as `attention` and taken back with
+	 * `attention_clear`, so the studio in the browser can say "switch to VS
+	 * Code" instead of looking frozen. Resent on every connect.
+	 */
+	private _attention = new Map<string, { reason: string; detail: string }>();
+	private _attentionSeq = 0;
+	private _trustListener: vscode.Disposable | undefined;
 	// True once the "connected in another window" notification has been shown
 	// for the current stand-down. Reset on every successful connect so the
 	// user is told again if it happens again later.
@@ -496,6 +506,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		this._getToken = getToken;
 		this._refreshToken = refreshToken;
 		this._outputChannel = vscode.window.createOutputChannel('Mosayic WebSocket');
+		this._trustListener = vscode.workspace.onDidGrantWorkspaceTrust(() => this._clearAttention('workspace_trust'));
 		this._handlers = {
 			command: (m) => void this._executeCommand(m.request_id, m.command),
 			terminal_command: (m) => void this._runInTerminal(m.request_id, m.command, m.name),
@@ -693,6 +704,12 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 	 * URI; this just picks the right terminal inside the window.
 	 */
 	focusLastTerminal(): void {
+		// The studio's "VS Code needs you" button lands here: show what's
+		// waiting rather than a terminal when it's the trust question.
+		if (this._attention.has('workspace_trust') && !vscode.workspace.isTrusted) {
+			void vscode.commands.executeCommand('workbench.trust.manage');
+			return;
+		}
 		const target = this._lastTerminalName
 			? vscode.window.terminals.find(t => t.name === this._lastTerminalName)
 			: undefined;
@@ -793,6 +810,16 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				capabilities: EXTENSION_CAPABILITIES,
 				home: homedir(),
 			});
+			// The trust question is open whenever this folder isn't trusted.
+			if (!vscode.workspace.isTrusted && vscode.workspace.workspaceFolders?.length) {
+				this._attention.set('workspace_trust', {
+					reason: 'workspace_trust',
+					detail: 'VS Code is asking whether you trust the files in this folder. Choose “Yes, I trust the authors”.',
+				});
+			}
+			for (const [id, a] of this._attention) {
+				this._sendJson({ type: 'attention', id, reason: a.reason, detail: a.detail });
+			}
 			this._setState('connected', apiUrl);
 		});
 
@@ -983,11 +1010,17 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		if (mode === 'allowlisted' && isAllowlistedCommand(command)) { return 'allow'; }
 
 		const redacted = this._redact(command);
-		const choice = await vscode.window.showWarningMessage(
-			`Mosayic server wants to ${verb}: ${redacted}`,
-			{ modal: false },
-			'Allow', 'Allow All (session)', 'Deny',
-		);
+		const attentionId = this._raiseAttention('consent', 'VS Code is asking whether Mosayic may run a command. Allow it in the notification at the bottom right.');
+		let choice: string | undefined;
+		try {
+			choice = await vscode.window.showWarningMessage(
+				`Mosayic server wants to ${verb}: ${redacted}`,
+				{ modal: false },
+				'Allow', 'Allow All (session)', 'Deny',
+			);
+		} finally {
+			this._clearAttention(attentionId);
+		}
 		if (choice === 'Allow All (session)') {
 			// Session-scoped — cleared on sign-out, reset command, or reload.
 			this._sessionAllowAll = true;
@@ -1214,8 +1247,26 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			// Always reuse the current window. Two open windows means two
 			// extension instances racing on the same WebSocket route, so the
 			// backend can't tell which one should run a given command.
-			this._log(`Opening folder: ${resolved.path}`);
 			const uri = vscode.Uri.file(resolved.path);
+			// Already open here: switching would only reload the window.
+			const current = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+			if (current && samePath(current, uri.fsPath)) {
+				this._log(`Folder already open: ${resolved.path}`);
+				this._sendJson({ type: 'open_folder_result', request_id: requestId, status: 'opened' });
+				return;
+			}
+			// Switching folders in this window asks "Save changes?" for every
+			// unsaved editor (unless files.hotExit backs them up), and a student
+			// sitting in the browser never sees it (2026-11-05, a call: it never
+			// happened on a machine with autosave on). Save the named ones first,
+			// as autosave would; an untitled scratch tab can't be saved without a
+			// Save As dialog, so VS Code may still ask about that one.
+			try {
+				await vscode.workspace.saveAll(false);
+			} catch (err) {
+				this._log(`saveAll before open_folder failed: ${err instanceof Error ? err.message : String(err)}`);
+			}
+			this._log(`Opening folder: ${resolved.path}`);
 			this._sendJson({ type: 'open_folder_result', request_id: requestId, status: 'opened' });
 			await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: false });
 		} catch (err) {
@@ -1229,6 +1280,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		try {
 			this._log(`Folder picker requested: ${title ?? 'Select folder'}`);
 
+			const attentionId = this._raiseAttention('pick_folder', 'VS Code is showing a folder picker. Choose the folder there.');
 			const uris = await vscode.window.showOpenDialog({
 				canSelectFolders: true,
 				canSelectFiles: false,
@@ -1239,6 +1291,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 				title: title || 'Choose a folder',
 			});
 
+			this._clearAttention(attentionId);
 			const path = uris?.[0]?.fsPath ?? null;
 			this._log(path ? `Folder selected: ${path}` : 'Folder picker cancelled');
 			this._sendJson({ type: 'pick_folder_result', request_id: requestId, path });
@@ -1251,6 +1304,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			this._log(`_pickFolder failed: ${msg}`);
+			for (const id of [...this._attention.keys()]) { if (id.startsWith('pick_folder:')) { this._clearAttention(id); } }
 			this._sendJson({ type: 'pick_folder_result', request_id: requestId, path: null, error: msg });
 		}
 	}
@@ -1372,6 +1426,19 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			const msg = err instanceof Error ? err.message : String(err);
 			this._log(`_readFile failed: ${msg}`);
 			this._sendJson({ type: 'read_file_result', request_id: requestId, error: msg });
+		}
+	}
+
+	/** Something here is waiting on the person: tell the backend. Returns the id to clear. */
+	private _raiseAttention(reason: string, detail: string, id = `${reason}:${++this._attentionSeq}`): string {
+		this._attention.set(id, { reason, detail });
+		this._sendJson({ type: 'attention', id, reason, detail });
+		return id;
+	}
+
+	private _clearAttention(id: string): void {
+		if (this._attention.delete(id)) {
+			this._sendJson({ type: 'attention_clear', id });
 		}
 	}
 
@@ -1510,6 +1577,14 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		}
 		this._activeTerminalListeners = [];
 		this._terminalRegistry.disposeAll();
+		this._trustListener?.dispose();
 		this._outputChannel.dispose();
 	}
+}
+
+/** Two folder paths name the same folder (case-insensitive on Windows and macOS). */
+function samePath(a: string, b: string): boolean {
+	const norm = (p: string) => p.replace(/[\\/]+$/, '');
+	const x = norm(a), y = norm(b);
+	return process.platform === 'linux' ? x === y : x.toLowerCase() === y.toLowerCase();
 }

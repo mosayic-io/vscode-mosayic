@@ -291,6 +291,26 @@ relayed commands do. Every `claude` spawn gets `CLAUDE_CODE_GIT_BASH_PATH`
 (`claudeEnv` in `claude.ts`) unless the student set one. Not yet run on a
 real Windows machine.
 
+## Workspace Trust and folder switches (0.2.21)
+
+`package.json` declares `capabilities.untrustedWorkspaces: limited`. Without
+it VS Code DISABLES the extension in Restricted Mode, so the first time
+Mosayic opened a never-seen project folder the trust question took the
+connection down and the studio just waited. `mosayic.environment`, `apiUrl`,
+`confirmCommands` and `windowsShell` are `restrictedConfigurations`: an
+untrusted folder's own settings can't redirect the backend or loosen
+consent. `_openFolder` skips a folder that's already open and runs
+`workspace.saveAll(false)` first, so switching doesn't stop on "Save
+changes?" (untitled tabs can still ask).
+
+**"VS Code needs you"** (capability `attention`, 0.2.21): whatever waits on
+the person here is sent as `{type:'attention', id, reason, detail}` and taken
+back with `{type:'attention_clear', id}` — the consent toast (`consent:<n>`),
+the folder picker (`pick_folder:<n>`), and the trust question
+(`workspace_trust`, while `!workspace.isTrusted`, cleared on
+`onDidGrantWorkspaceTrust`). The open set is resent on every connect. The
+`/focus` URI opens `workbench.trust.manage` while trust is pending.
+
 ## Command Execution
 
 When a `command` message arrives (`wsClient.ts:153-217`):

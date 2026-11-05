@@ -4,6 +4,15 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.21] - 2026-11-05
+
+### Added
+- **The studio knows when VS Code is waiting for you** (capability `attention`). When Mosayic asks whether it may run a command, shows a folder picker, or VS Code asks whether you trust a folder, the studio in your browser now shows "VS Code needs you" with an Open VS Code button, instead of looking stuck. Open VS Code goes straight to the trust screen when that's what's waiting.
+
+### Fixed
+- **Mosayic keeps working while VS Code asks whether you trust a folder.** The first time Mosayic opens a new project folder, VS Code asks "Do you trust the authors of the files in this folder?". Until you answered, VS Code had switched Mosayic off, so the studio just saw it go offline and waited, with nothing telling you to look at VS Code. Mosayic now declares that it works in a folder you haven't trusted yet. In such a folder, the folder's own settings can't change which Mosayic server is used, when commands are confirmed or which shell runs them; only your own settings count.
+- **No "Save changes?" dialog when Mosayic opens your project.** Opening a project folder in the same window made VS Code ask about every unsaved file, which on a machine without autosave stopped project setup halfway, behind the browser. Mosayic now saves your open files first, as autosave would, and doesn't reopen a folder that's already open. An unsaved "Untitled" tab can't be saved without asking you for a name, so VS Code may still ask about that one.
+
 ## [0.2.20] - 2026-11-04
 
 ### Fixed
