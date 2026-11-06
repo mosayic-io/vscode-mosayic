@@ -226,6 +226,29 @@ the shell and Claude finished the job underneath. stdin is `ignore`, or
 The parser copies `session_id` / `resume` / `fork` across since 0.2.17; from
 0.2.10 to 0.2.16 it dropped them and every run was cold.
 
+**Claude's studio knowledge (0.2.22, capability `claude_knowledge`, `src/knowledge.ts`).**
+A `claude_run` may carry `knowledge_url` (mosayic-api sets it when the studio
+sends `knowledge: true`: the studio's own `/claude-knowledge.json`, built by
+app.kealy.studio's `scripts/claudeKnowledge.ts` from its `knowledge/` docs and
+the course). `acceptableKnowledgeUrl` takes https, or http on localhost only.
+Before the run, `ensureKnowledge` does a conditional GET (ETag, 5 s timeout),
+validates the pack (`format` 1, hex `version`, ≤ 400 `.md` files under plain
+path segments, ≤ 6 MB, a `SKILL.md`) and writes it into
+`<globalStorage>/claude-knowledge/<version>/` as a plugin: the manifest
+`.claude-plugin/plugin.json` is written HERE and every file goes under
+`skills/kealy-studio/`, so a pack can never add hooks, MCP servers, agents or
+commands. The previous version is kept (a run may still be reading it), older
+ones pruned. Offline or refused → the last good copy; none → the run goes
+ahead without it. The run then gets `--plugin-dir <folder>`, read-only
+`Read`/`Grep`/`Glob` rules for that folder (`knowledgeToolRules`: `//` +
+POSIX path; Windows `C:\…` → `//c/…`, unverified on a real Windows machine;
+without them a headless Read outside the run's folder is refused, verified
+2026-11-06), and `KNOWLEDGE_PROMPT` appended to its system prompt. Never the
+student's project, never `~/.claude` (John, 2026-11-06): Claude outside the
+studio knows nothing of it. A Stop that arrives during the fetch is honoured
+(the run never starts, `stop_reason: cancelled`). `claude_open` (the panel in
+VS Code) can't take a plugin dir, so interactive Claude doesn't get it.
+
 **The status bar's Claude item** (`extension.ts`, `wsClient.onClaudeRunsChange`):
 "$(loading~spin) Claude is working on <folder> · Stop" while any run is in
 flight; clicking runs `vscode-mosayic.stopClaudeRuns` (a modal confirm, then

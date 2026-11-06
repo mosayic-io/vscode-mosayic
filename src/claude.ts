@@ -5,6 +5,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { mosayicTerminalOptions, toolchainEnv } from './toolchain';
 import { gitBashPath, resolveShellChoice } from './shell';
+import { KNOWLEDGE_PROMPT, knowledgeToolRules } from './knowledge';
 
 /**
  * The environment every `claude` process gets: our PATH, and on Windows
@@ -377,6 +378,15 @@ export interface HeadlessRunLimits {
 	maxBudgetUsd?: number;
 	timeoutMs?: number;
 	appendSystemPrompt?: string;
+	/**
+	 * Claude's studio knowledge (0.2.22): the plugin folder `knowledge.ts`
+	 * keeps in this extension's own storage. Never from the backend directly:
+	 * `_claudeRun` sets it after fetching the pack the run's `knowledge_url`
+	 * names. Adds `--plugin-dir`, read-only rules for that folder (it sits
+	 * outside the run's folder, so a headless Read there is otherwise refused)
+	 * and one line telling Claude the skill is there.
+	 */
+	pluginDir?: string;
 }
 
 /** Something Claude wanted to do that this run doesn't allow. */
@@ -418,12 +428,15 @@ export function sanitizeLimits(raw: Record<string, unknown>): HeadlessRunLimits 
 	return limits;
 }
 
-function limitArgs(limits: HeadlessRunLimits): string[] {
+export function limitArgs(limits: HeadlessRunLimits): string[] {
 	const args: string[] = [];
-	if (limits.allowedTools?.length) { args.push('--allowedTools', limits.allowedTools.join(',')); }
+	const allowed = [...(limits.allowedTools ?? []), ...(limits.pluginDir ? knowledgeToolRules(limits.pluginDir) : [])];
+	if (allowed.length) { args.push('--allowedTools', allowed.join(',')); }
 	if (limits.maxTurns !== undefined) { args.push('--max-turns', String(limits.maxTurns)); }
 	if (limits.maxBudgetUsd !== undefined) { args.push('--max-budget-usd', limits.maxBudgetUsd.toFixed(2)); }
-	if (limits.appendSystemPrompt) { args.push('--append-system-prompt', limits.appendSystemPrompt); }
+	if (limits.pluginDir) { args.push('--plugin-dir', limits.pluginDir); }
+	const systemPrompt = [limits.appendSystemPrompt, limits.pluginDir ? KNOWLEDGE_PROMPT : undefined].filter(Boolean).join('\n\n');
+	if (systemPrompt) { args.push('--append-system-prompt', systemPrompt); }
 	return args;
 }
 

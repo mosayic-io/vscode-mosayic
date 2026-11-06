@@ -23,6 +23,7 @@ import {
 	type ProbeSpec,
 } from '../toolchain';
 import { missingProjectFolderMessage } from '../folderErrors';
+import { acceptableKnowledgeUrl, ensureKnowledge } from '../knowledge';
 import { TerminalRegistry } from './managedTerminal';
 import {
 	getClaudeStatus,
@@ -103,7 +104,11 @@ const MEMBERSHIP_URL = 'https://kealy.studio';
 // ``cost_usd`` and ``denials`` on ``claude_run_result``. Also the release where
 // ``session_id`` / ``resume`` / ``fork`` really reach the run: from 0.2.10 to
 // 0.2.16 the message parser dropped them, so every run started cold.
-const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions', 'toolchain', 'claude_limits', 'attention'] as const;
+//
+// ``claude_knowledge`` (0.2.22): ``claude_run`` understands ``knowledge_url``,
+// the studio's ``/claude-knowledge.json``, kept in this extension's storage as
+// a Claude Code plugin and given to the run with ``--plugin-dir`` (knowledge.ts).
+const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions', 'toolchain', 'claude_limits', 'attention', 'claude_knowledge'] as const;
 
 export type WsState =
 	| 'signed-out'
@@ -135,7 +140,7 @@ type IncomingMessage =
 	| { type: 'claude_status'; request_id: string }
 	| { type: 'claude_install'; request_id: string }
 	| { type: 'claude_open'; request_id: string; prompt?: string; path?: string }
-	| { type: 'claude_run'; request_id: string; prompt: string; path: string; session_id?: string; resume?: string; fork?: boolean; limits: HeadlessRunLimits; label?: string }
+	| { type: 'claude_run'; request_id: string; prompt: string; path: string; session_id?: string; resume?: string; fork?: boolean; limits: HeadlessRunLimits; label?: string; knowledge_url?: string }
 	| { type: 'toolchain_probe'; request_id: string; tools: ProbeSpec[]; managers: ManagerSpec[] }
 	| { type: 'toolchain_install'; request_id: string; plan: InstallPlan }
 	| { type: 'toolchain_remove'; request_id: string; key: string }
@@ -246,6 +251,7 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 					fork: m.fork === true,
 					limits: sanitizeLimits(m),
 					label: isString(m.label) ? m.label.slice(0, 120) : undefined,
+					knowledge_url: acceptableKnowledgeUrl(m.knowledge_url),
 				};
 			}
 			return undefined;
@@ -522,7 +528,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			claude_status: (m) => void this._claudeStatus(m.request_id),
 			claude_install: (m) => void this._claudeInstall(m.request_id),
 			claude_open: (m) => void this._claudeOpen(m.request_id, m.prompt, m.path),
-			claude_run: (m) => this._claudeRun(m.request_id, m.prompt, m.path, { sessionId: m.session_id, resume: m.resume, fork: m.fork }, m.limits, m.label),
+			claude_run: (m) => this._claudeRun(m.request_id, m.prompt, m.path, { sessionId: m.session_id, resume: m.resume, fork: m.fork }, m.limits, m.label, m.knowledge_url),
 			claude_cancel: (m) => this._claudeCancel(m.request_id),
 			toolchain_probe: (m) => void this._toolchainProbe(m.request_id, m.tools, m.managers),
 			toolchain_install: (m) => void this._toolchainInstall(m.request_id, m.plan),
@@ -590,7 +596,37 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 
 	private _claudeRun(
 		requestId: string, prompt: string, path: string, session: HeadlessRunSession,
-		limits: HeadlessRunLimits = {}, label?: string,
+		limits: HeadlessRunLimits = {}, label?: string, knowledgeUrl?: string,
+	): void {
+		if (!knowledgeUrl) {
+			this._startClaudeRun(requestId, prompt, path, session, limits, label);
+			return;
+		}
+		// Fetch (or reuse) the studio's knowledge first: a few seconds at most,
+		// and a run goes ahead without it rather than fail. A Stop that lands
+		// meanwhile has nothing to kill yet, so it's remembered here and the run
+		// never starts.
+		let cancelled = false;
+		this._claudeRuns.set(requestId, { cancel: () => { cancelled = true; } });
+		void ensureKnowledge(knowledgeUrl, (line) => this._log(line)).then((knowledge) => {
+			this._claudeRuns.delete(requestId);
+			if (cancelled) {
+				this._sendJson({
+					type: 'claude_run_result', request_id: requestId,
+					exit_code: 1, result_text: null, error: 'Stopped', stop_reason: 'cancelled',
+					session_id: null, duration_ms: null, num_turns: null,
+					input_tokens: null, output_tokens: null, cache_read_tokens: null,
+				});
+				return;
+			}
+			const withKnowledge = knowledge ? { ...limits, pluginDir: knowledge.pluginDir } : limits;
+			this._startClaudeRun(requestId, prompt, path, session, withKnowledge, label);
+		});
+	}
+
+	private _startClaudeRun(
+		requestId: string, prompt: string, path: string, session: HeadlessRunSession,
+		limits: HeadlessRunLimits, label?: string,
 	): void {
 		const resolved = resolveFolderPath(path);
 		if ('error' in resolved) {

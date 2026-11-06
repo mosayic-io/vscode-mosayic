@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.22] - 2026-11-06
+
+### Added
+- **Claude in the studio knows the studio and the course** (capability `claude_knowledge`). When you ask the Claude box in Kealy Studio a question, Claude now has a reference to read: how every part of the studio works (its sheets, the Toolbox, Publish, the phone preview, your database and secrets, the templates your project came from, what to do when something fails) and the full text of the course. It reads only the page it needs. The reference is kept in this extension's own storage, never in your project or in your own Claude Code settings, and only runs started from the studio get it, so Claude in your own terminal is untouched. It's refreshed from the studio before each run (a quick check, nothing downloaded when it hasn't changed) and the last copy is used when you're offline. Claude can read it but not change it, and it contains only text: nothing in it can run on your computer.
+
 ## [0.2.21] - 2026-11-05
 
 ### Added

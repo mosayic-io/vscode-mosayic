@@ -15,6 +15,7 @@ import {
 	type Environment,
 } from './config';
 import { runDockerPreflight } from './docker';
+import { initKnowledge } from './knowledge';
 
 // Last backend URL that issued the currently stored session tokens. If the
 // resolved API URL no longer matches, the session is stale (user switched
@@ -23,6 +24,10 @@ import { runDockerPreflight } from './docker';
 const LAST_API_URL_KEY = 'mosayic.lastApiUrl';
 
 export function activate(context: vscode.ExtensionContext) {
+	// Claude's studio knowledge lives in this extension's own storage, never
+	// in a project or ~/.claude (knowledge.ts).
+	initKnowledge(context.globalStorageUri.fsPath);
+
 	const uriHandler = new UriEventHandler();
 	context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));
 
