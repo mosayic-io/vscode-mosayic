@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { SupabaseClient } from './supabase';
 import { MosayicAuthenticationProvider } from './auth/authProvider';
 import { UriEventHandler } from './auth/uriHandler';
 import { MosayicWebSocketClient, type WsState } from './ws/wsClient';
@@ -73,6 +74,13 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 	);
 	context.subscriptions.push(wsClient);
+	// The student's Supabase grant lives in this window's secret storage
+	// (0.2.24); the backend holds none of it. See supabase.ts.
+	wsClient.supabase = new SupabaseClient(
+		context.secrets,
+		async () => (await currentSession())?.accessToken,
+		(line) => wsClient.outputChannel.appendLine(`[${stamp()}] ${line}`),
+	);
 
 	// Status bar — always visible so the user can see what the extension is doing
 	const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);

@@ -334,6 +334,34 @@ the folder picker (`pick_folder:<n>`), and the trust question
 `onDidGrantWorkspaceTrust`). The open set is resent on every connect. The
 `/focus` URI opens `workbench.trust.manage` while trust is pending.
 
+## 0.2.24 (2026-11-08): the student's Supabase grant lives HERE
+
+Capability **`supabase_client`**, `src/supabase.ts`. Until this day the
+backend held every student's Supabase OAuth tokens and generated database
+passwords, and drove Supabase's Management API itself (John: never what he
+meant to be holding). Now the consent is the same one click, but the minted
+pair comes to this extension (`supabase_tokens`) and lives in VS Code's
+secret storage (the OS keychain, like gh's token); the backend keeps nothing
+and renews a pair on request (`POST /supabase-oauth/refresh`, with the
+extension's own Mosayic session; a 400/401/403/409 there drops the pair:
+"connect again"). Messages, each answered by `<type>_result`:
+
+| Incoming | Does |
+|----------|------|
+| `supabase_tokens` `{access_token, refresh_token, expires_at}` | store |
+| `supabase_forget` | delete; the refresh token goes back so the backend can revoke it |
+| `supabase_status` | `{connected, organization_slug, organization_name}` (a live `/v1/organizations`) |
+| `supabase_api` `{method, path, body?, env_secrets?}` | ONE of the **`ALLOWED`** paths (orgs, projects, a project, `config/auth` GET/PATCH); anything else is refused by name — in particular `/database/query`: this code can't run SQL on a student's live database even if told to. `env_secrets` names payload fields to fill from a file on this machine (the Google client secret from `<api>/supabase/.env`). Auth-config reads come back with secret fields as `<set>`. |
+| `supabase_provision` `{name, organization_slug, region}` | generate the password → `POST /v1/projects` → keep the password in secret storage under the ref until `supabase_finalize` has put it in GitHub |
+| `supabase_finalize` `{ref, api_path?, gcloud_project_id?, want_*}` | once `ACTIVE_HEALTHY`: the keys (publishable key + URL go back; the **secret key is piped into `gcloud secrets create` / `versions add` on stdin and never returned**), the pooler config → `DATABASE_CONNECTION_STRING` via `gh secret set` on stdin in `api_path` (then the held password is deleted) |
+| `supabase_db_secret` `{ref, api_path, password?}` | the GitHub secret from a password given now (link / after a dashboard reset) or the held one; nothing kept |
+
+Secret values ride **stdin** (`runWithInput`, Mosayic's shell + PATH), never
+a command line. Nothing here is logged beyond "stored" / "forgotten" /
+"created <ref>". `extension.ts` gives `wsClient.supabase` the context's
+`SecretStorage`. Not yet run against a real Supabase account: John runs the
+first create on his own.
+
 ## 0.2.23 (2026-11-08, John's Windows test)
 
 - **One Claude Code install at a time** (`wsClient._claudeInstalling`). VS

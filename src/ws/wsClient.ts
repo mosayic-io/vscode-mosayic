@@ -25,6 +25,7 @@ import {
 import { missingProjectFolderMessage } from '../folderErrors';
 import { acceptableKnowledgeUrl, ensureKnowledge } from '../knowledge';
 import { TerminalRegistry } from './managedTerminal';
+import { SupabaseClient, SupabaseNotConnected } from '../supabase';
 import {
 	getClaudeStatus,
 	installClaudeExtension,
@@ -108,7 +109,11 @@ const MEMBERSHIP_URL = 'https://kealy.studio';
 // ``claude_knowledge`` (0.2.22): ``claude_run`` understands ``knowledge_url``,
 // the studio's ``/claude-knowledge.json``, kept in this extension's storage as
 // a Claude Code plugin and given to the run with ``--plugin-dir`` (knowledge.ts).
-const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions', 'toolchain', 'claude_limits', 'attention', 'claude_knowledge'] as const;
+// ``supabase_client`` (0.2.24): the student's Supabase grant lives HERE (VS
+// Code's secret storage), never on the backend; the ``supabase_*`` messages
+// below are how the backend asks for a Management API call — allowed paths
+// only, no SQL, secrets handled on this machine (see supabase.ts).
+const EXTENSION_CAPABILITIES = ['native_file_patch', 'claude_bridge', 'claude_sessions', 'toolchain', 'claude_limits', 'attention', 'claude_knowledge', 'supabase_client'] as const;
 
 export type WsState =
 	| 'signed-out'
@@ -145,6 +150,14 @@ type IncomingMessage =
 	| { type: 'toolchain_install'; request_id: string; plan: InstallPlan }
 	| { type: 'toolchain_remove'; request_id: string; key: string }
 	| { type: 'claude_cancel'; request_id: string }
+	// The Supabase grant (0.2.24, capability ``supabase_client``) — see supabase.ts.
+	| { type: 'supabase_tokens'; request_id: string; access_token: string; refresh_token: string; expires_at: number }
+	| { type: 'supabase_forget'; request_id: string }
+	| { type: 'supabase_status'; request_id: string }
+	| { type: 'supabase_api'; request_id: string; method: string; path: string; body?: unknown; env_secrets?: Record<string, { path: string; key: string }> }
+	| { type: 'supabase_provision'; request_id: string; name: string; organization_slug: string; region: string }
+	| { type: 'supabase_finalize'; request_id: string; ref: string; api_path?: string | null; gcloud_project_id?: string | null; want_keys: boolean; want_vault: boolean; want_db_secret: boolean }
+	| { type: 'supabase_db_secret'; request_id: string; ref: string; api_path: string; password?: string | null }
 	| { type: 'pong' };
 
 function isString(v: unknown): v is string {
@@ -279,6 +292,43 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
 		case 'toolchain_remove':
 			if (isString(m.request_id) && isString(m.key)) {
 				return { type, request_id: m.request_id, key: m.key };
+			}
+			return undefined;
+		case 'supabase_tokens':
+			if (isString(m.request_id) && isString(m.access_token) && isString(m.refresh_token)) {
+				return { type, request_id: m.request_id, access_token: m.access_token, refresh_token: m.refresh_token, expires_at: Number(m.expires_at) || 0 };
+			}
+			return undefined;
+		case 'supabase_forget':
+		case 'supabase_status':
+			if (isString(m.request_id)) {
+				return { type, request_id: m.request_id };
+			}
+			return undefined;
+		case 'supabase_api':
+			if (isString(m.request_id) && isString(m.method) && isString(m.path)) {
+				const envSecrets = m.env_secrets && typeof m.env_secrets === 'object' ? m.env_secrets as Record<string, { path: string; key: string }> : undefined;
+				return { type, request_id: m.request_id, method: m.method, path: m.path, body: m.body, env_secrets: envSecrets };
+			}
+			return undefined;
+		case 'supabase_provision':
+			if (isString(m.request_id) && isString(m.name) && isString(m.organization_slug) && isString(m.region)) {
+				return { type, request_id: m.request_id, name: m.name, organization_slug: m.organization_slug, region: m.region };
+			}
+			return undefined;
+		case 'supabase_finalize':
+			if (isString(m.request_id) && isString(m.ref)) {
+				return {
+					type, request_id: m.request_id, ref: m.ref,
+					api_path: isString(m.api_path) ? m.api_path : null,
+					gcloud_project_id: isString(m.gcloud_project_id) ? m.gcloud_project_id : null,
+					want_keys: m.want_keys !== false, want_vault: m.want_vault !== false, want_db_secret: m.want_db_secret !== false,
+				};
+			}
+			return undefined;
+		case 'supabase_db_secret':
+			if (isString(m.request_id) && isString(m.ref) && isString(m.api_path)) {
+				return { type, request_id: m.request_id, ref: m.ref, api_path: m.api_path, password: isString(m.password) ? m.password : null };
 			}
 			return undefined;
 		case 'pong':
@@ -533,10 +583,41 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			toolchain_probe: (m) => void this._toolchainProbe(m.request_id, m.tools, m.managers),
 			toolchain_install: (m) => void this._toolchainInstall(m.request_id, m.plan),
 			toolchain_remove: (m) => void this._toolchainRemove(m.request_id, m.key),
+			supabase_tokens: (m) => void this._supabase(m.request_id, 'supabase_tokens_result', (c) => c.store({ access_token: m.access_token, refresh_token: m.refresh_token, expires_at: m.expires_at }).then(() => ({ status: 'ok' }))),
+			supabase_forget: (m) => void this._supabase(m.request_id, 'supabase_forget_result', (c) => c.forget().then((refresh_token) => ({ status: 'ok', refresh_token }))),
+			supabase_status: (m) => void this._supabase(m.request_id, 'supabase_status_result', (c) => c.status()),
+			supabase_api: (m) => void this._supabase(m.request_id, 'supabase_api_result', (c) => c.relay(m.method, m.path, m.body, m.env_secrets)),
+			supabase_provision: (m) => void this._supabase(m.request_id, 'supabase_provision_result', (c) => c.provision({ name: m.name, organization_slug: m.organization_slug, region: m.region })),
+			supabase_finalize: (m) => void this._supabase(m.request_id, 'supabase_finalize_result', (c) => c.finalize(m)),
+			supabase_db_secret: (m) => void this._supabase(m.request_id, 'supabase_db_secret_result', (c) => c.dbSecret({ ref: m.ref, api_path: m.api_path, password: m.password })),
 			pong: () => { this._lastPongAt = Date.now(); },
 		};
 	}
 
+
+	// ── The Supabase grant (0.2.24) ─────────────────────────────────
+	// Set by extension.ts once secret storage is in hand. Every reply goes
+	// back whole; a reply never carries a token, a password or a secret key
+	// (supabase.ts keeps those on this machine).
+	public supabase: SupabaseClient | null = null;
+
+	private async _supabase(requestId: string, resultType: string, work: (client: SupabaseClient) => Promise<Record<string, unknown>>): Promise<void> {
+		if (!this.supabase) {
+			this._sendJson({ type: resultType, request_id: requestId, error: 'Supabase isn’t available in this VS Code window.', code: 'unavailable' });
+			return;
+		}
+		try {
+			const result = await work(this.supabase);
+			this._sendJson({ type: resultType, request_id: requestId, ...result });
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			this._log(`${resultType}: ${msg}`);
+			this._sendJson({
+				type: resultType, request_id: requestId, error: msg,
+				code: err instanceof SupabaseNotConnected ? 'not_connected' : 'error',
+			});
+		}
+	}
 
 	// ── Claude Code bridge ──────────────────────────────────────────
 
