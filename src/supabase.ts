@@ -73,7 +73,7 @@ const ALLOWED: RegExp[] = [
 	new RegExp(`^PATCH /v1/projects/${REF}/config/auth$`),
 ];
 /** Fields of the auth config that are secrets: never handed back. */
-const AUTH_SECRET_FIELDS = /(_secret$|^smtp_pass$|_private_key$|^hook_.*_secrets?$)/;
+const AUTH_SECRET_FIELDS = /(_secret$|^smtp_pass$|_private_key$|^hook_.*_secrets?$|_auth_token$|_access_key$|_api_key$)/;
 
 export interface MgmtResult { status: number; data: unknown; [key: string]: unknown }
 
@@ -82,8 +82,8 @@ let refreshing: Promise<SupabaseTokens> | null = null;
 export class SupabaseClient {
 	constructor(
 		private readonly secrets: vscode.SecretStorage,
-		/** The extension's OWN Mosayic session, for the backend's renew endpoint. */
-		private readonly apiToken: () => Promise<string | undefined>,
+		/** The extension's OWN Mosayic session, for the backend's renew endpoint; `fresh` asks for it to be renewed first. */
+		private readonly apiToken: (fresh?: boolean) => Promise<string | undefined>,
 		private readonly log: (line: string) => void,
 	) {}
 
@@ -129,19 +129,25 @@ export class SupabaseClient {
 		return (await refreshing).access_token;
 	}
 
-	private async renew(refreshToken: string): Promise<SupabaseTokens> {
-		const bearer = await this.apiToken();
-		if (!bearer) { throw new SupabaseNotConnected('Mosayic isn’t signed in in VS Code.'); }
+	private async renew(refreshToken: string, retried = false): Promise<SupabaseTokens> {
+		const bearer = await this.apiToken(retried);
+		if (!bearer) { throw new Error('Mosayic isn’t signed in in VS Code.'); }
 		const res = await fetch(`${getApiUrl()}/supabase-oauth/refresh`, {
 			method: 'POST',
 			headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' },
 			body: JSON.stringify({ refresh_token: refreshToken }),
 			signal: AbortSignal.timeout(30_000),
 		});
-		if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 409) {
-			// A dead refresh token is how revocation presents itself.
+		if ((res.status === 401 || res.status === 403) && !retried) {
+			// OUR Mosayic session was stale (an hour old, the socket kept alive
+			// on pings), not the Supabase grant: renew it and try once more.
+			// (0.2.25: this used to drop the Supabase pair for no reason.)
+			return this.renew(refreshToken, true);
+		}
+		if (res.status === 409) {
+			// Supabase said the refresh token is dead: how revocation presents itself.
 			await this.secrets.delete(TOKENS_KEY);
-			this.log(`Supabase: renew refused (${res.status}); tokens dropped.`);
+			this.log('Supabase: renew refused by Supabase (409); tokens dropped.');
 			throw new SupabaseNotConnected('Your Supabase authorization has expired or was revoked. Connect it again.');
 		}
 		if (!res.ok) { throw new Error(`Couldn’t renew the Supabase authorization (${res.status}).`); }
@@ -179,7 +185,7 @@ export class SupabaseClient {
 		const key = `${method.toUpperCase()} ${path}`;
 		if (!ALLOWED.some((re) => re.test(key))) {
 			this.log(`Supabase: REFUSED ${key} (not an allowed path)`);
-			return { status: 403, data: { message: `Mosayic’s extension doesn’t make that Supabase call (${key}).` } };
+			return { status: 403, data: { code: 'not_allowed', message: `Mosayic’s extension doesn’t make that Supabase call (${key}).` } };
 		}
 		let payload = body;
 		if (envSecrets && payload && typeof payload === 'object') {
@@ -329,6 +335,7 @@ export class SupabaseClient {
 		if (!host || !user || !port) { return { ok: false, error: 'Supabase’s pooler config was missing its host details.' }; }
 		const connectionString = `postgresql://${encodeURIComponent(String(user))}:${encodeURIComponent(password)}@${host}:${port}/${db}`;
 		const result = await runWithInput('gh', ['secret', 'set', 'DATABASE_CONNECTION_STRING'], connectionString, apiPath);
+		if (result.exitCode === null) { return { ok: false, error: 'GitHub didn’t answer in time while setting the secret. Try again.' }; }
 		if (result.exitCode !== 0) { return { ok: false, error: result.stderr.trim() || 'GitHub didn’t accept the secret.' }; }
 		return { ok: true };
 	}

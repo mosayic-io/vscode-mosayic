@@ -343,8 +343,9 @@ meant to be holding). Now the consent is the same one click, but the minted
 pair comes to this extension (`supabase_tokens`) and lives in VS Code's
 secret storage (the OS keychain, like gh's token); the backend keeps nothing
 and renews a pair on request (`POST /supabase-oauth/refresh`, with the
-extension's own Mosayic session; a 400/401/403/409 there drops the pair:
-"connect again"). Messages, each answered by `<type>_result`:
+extension's own Mosayic session; a 401/403 there means OUR session was
+stale, so it's renewed and the call retried once — 0.2.25, it used to drop
+the Supabase pair; only Supabase's 409 drops the pair: "connect again"). Messages, each answered by `<type>_result`:
 
 | Incoming | Does |
 |----------|------|

@@ -78,7 +78,10 @@ export function activate(context: vscode.ExtensionContext) {
 	// (0.2.24); the backend holds none of it. See supabase.ts.
 	wsClient.supabase = new SupabaseClient(
 		context.secrets,
-		async () => (await currentSession())?.accessToken,
+		async (fresh) => {
+			if (fresh) { await authProvider.refreshSession(); }
+			return (await currentSession())?.accessToken;
+		},
 		(line) => wsClient.outputChannel.appendLine(`[${stamp()}] ${line}`),
 	);
 

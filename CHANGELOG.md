@@ -4,6 +4,24 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.25] - 2026-11-08
+
+### Fixed
+- **Your Supabase connection no longer disappears after an idle hour.** Renewing it goes through Mosayic's server with this extension's own sign-in; when that sign-in had gone stale, the renewal was refused and the extension wrongly dropped your Supabase connection. It now renews its own sign-in first and tries again, and only drops the connection when Supabase itself says it's been revoked.
+- A few more fields of your Supabase project's auth settings (SMS provider tokens and keys) stay on your computer when the studio reads those settings.
+- A GitHub secret that timed out while being set says so, instead of "GitHub didn't accept the secret".
+
+## [0.2.24] - 2026-11-08
+
+### Changed
+- **Your Supabase connection lives on your computer** (capability `supabase_client`). Connecting Supabase is the same one click, but the tokens it mints are kept in VS Code's secret storage (your operating system's keychain), never on Kealy Studio's servers, and every Supabase action the studio takes (creating your live database, reading its keys, switching on sign-in providers) runs from this computer. The database password for a project the studio creates is generated here and goes only into your backend repository's GitHub secret; the secret API key goes straight into your Google Cloud Secret Manager. This extension makes a fixed list of Supabase calls and nothing else: it will not run SQL on your live database.
+
+## [0.2.23] - 2026-11-08
+
+### Fixed
+- **Adding Claude Code no longer asks you to trust its publisher several times.** VS Code's "Do you trust the publisher Anthropic?" question can sit behind the browser for a while; each time the studio asked again, another question queued up. One install runs at a time now, and the studio's "VS Code needs you" banner tells you to click Trust Publisher & Install.
+- **Installing Node on Windows is reported as the success it was.** The installer added Node to your PATH, but the check that followed read a cached PATH and called the install a failure.
+
 ## [0.2.22] - 2026-11-06
 
 ### Added
