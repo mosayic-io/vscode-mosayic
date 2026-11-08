@@ -334,6 +334,21 @@ the folder picker (`pick_folder:<n>`), and the trust question
 `onDidGrantWorkspaceTrust`). The open set is resent on every connect. The
 `/focus` URI opens `workbench.trust.manage` while trust is pending.
 
+## 0.2.23 (2026-11-08, John's Windows test)
+
+- **One Claude Code install at a time** (`wsClient._claudeInstalling`). VS
+  Code's install waits on 'Do you trust the publisher "Anthropic"?', which
+  can sit behind the browser; the backend gave up after 120 s, the student
+  clicked again, and every request queued another trust dialog. A request
+  while one runs now waits for it. After 1.5 s the install raises attention
+  `claude_install` (the studio's "VS Code needs you" banner: click Trust
+  Publisher & Install). The trust question can't be skipped from an
+  extension (VS Code 1.145's `installExtension` sets no
+  `skipPublisherTrust`).
+- **`verify()` re-reads the registry PATH first.** winget's node said
+  "Path environment variable modified … Successfully installed", but the
+  30 s `registryPathCache` hid it, so a good install was reported failed.
+
 ## Command Execution
 
 When a `command` message arrives (`wsClient.ts:153-217`):

@@ -488,6 +488,11 @@ function placementRoot(placement: 'mosayic' | 'programs'): string {
 }
 
 async function verify(plan: InstallPlan): Promise<{ ok: boolean; version: string | null }> {
+	// Re-read the registry PATH first (0.2.23): an installer that just added
+	// to it (winget's node: "Path environment variable modified … Successfully
+	// installed") was invisible for up to 30 s of cache, so a good install
+	// was reported failed (John, 2026-11-08, Windows).
+	registryPathCache = null;
 	const result = await runShell(plan.verify, 60_000);
 	return {
 		ok: result.exitCode === 0,

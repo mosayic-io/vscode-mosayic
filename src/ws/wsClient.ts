@@ -575,8 +575,32 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 		this._sendJson({ type: 'claude_status_result', request_id: requestId, ...status });
 	}
 
+	// One install at a time (0.2.23). VS Code's install waits on its "Do you
+	// trust the publisher Anthropic?" dialog, which sits behind the browser;
+	// the backend gave up after 120 s, the student clicked again, and each
+	// new request queued ANOTHER trust dialog (John, 2026-11-08: "I had to
+	// trust it 3 or 4 times"). A request while one is running now waits for
+	// that one. And while it waits, the studio is told why (attention).
+	private _claudeInstalling: Promise<Awaited<ReturnType<typeof installClaudeExtension>>> | null = null;
+
 	private async _claudeInstall(requestId: string): Promise<void> {
-		const result = await installClaudeExtension((line) => this._log(line));
+		if (!this._claudeInstalling) {
+			let attentionId: string | null = null;
+			const waiting = setTimeout(() => {
+				attentionId = this._raiseAttention(
+					'claude_install',
+					'VS Code is asking “Do you trust the publisher Anthropic?”. Click Trust Publisher & Install there to add Claude Code.',
+				);
+			}, 1500);
+			this._claudeInstalling = installClaudeExtension((line) => this._log(line)).finally(() => {
+				clearTimeout(waiting);
+				if (attentionId) { this._clearAttention(attentionId); }
+				this._claudeInstalling = null;
+			});
+		} else {
+			this._log('Claude Code install already in progress; waiting for it.');
+		}
+		const result = await this._claudeInstalling;
 		this._sendJson({ type: 'claude_install_result', request_id: requestId, ...result });
 	}
 
