@@ -611,8 +611,14 @@ async function installViaShell(command: string, plan: InstallPlan, onProgress: P
 async function installViaCommand(plan: Extract<InstallPlan, { kind: 'command' }>, onProgress: Progress): Promise<InstallResult> {
 	if (plan.note) { onProgress(plan.note, { phase: 'install' }); }
 	await spawnDirect(plan.command, plan.args, 60_000);
+	const apple = process.platform === 'darwin' && plan.command === 'xcode-select';
 	const deadline = Date.now() + plan.poll_seconds * 1000;
 	let announced = false;
+	// Apple's installer window, watched so a Cancel ends the wait at once
+	// instead of after fifteen minutes (John, 2026-11-09).
+	let installerSeen = false;
+	let goneSince: number | null = null;
+	let raised = 0;
 	while (Date.now() < deadline) {
 		const checked = await verify(plan);
 		if (checked.ok) {
@@ -622,9 +628,50 @@ async function installViaCommand(plan: Extract<InstallPlan, { kind: 'command' }>
 			announced = true;
 			onProgress('Waiting for the install to finish…', { phase: 'install' });
 		}
-		await new Promise((r) => setTimeout(r, 5_000));
+		if (apple) {
+			const running = await appleInstallerRunning();
+			if (running) {
+				installerSeen = true;
+				goneSince = null;
+				// It opens behind whatever has focus (the browser): bring it to
+				// the front, a few times while it's still the question, since the
+				// app can take a moment to put its window up.
+				if (raised < 3) {
+					raised += 1;
+					await raiseAppleInstaller();
+				}
+			} else if (installerSeen) {
+				// Closed. Give git a few seconds to answer (a finished install
+				// quits the app too) before calling it a Cancel.
+				goneSince ??= Date.now();
+				if (Date.now() - goneSince > 10_000) {
+					return { status: 'error', error: APPLE_INSTALLER_CLOSED };
+				}
+			}
+		}
+		await new Promise((r) => setTimeout(r, apple ? 2_000 : 5_000));
 	}
 	return { status: 'error', error: `${plan.key} still isn't here. If you closed the installer, click Install again.` };
+}
+
+/** The process (and app) name of the window `xcode-select --install` opens. */
+const APPLE_INSTALLER = 'Install Command Line Developer Tools';
+/** Said when Apple's window closed without git. The studio matches its start. */
+const APPLE_INSTALLER_CLOSED = 'The Apple installer was closed before git was installed. Click Install again, and click Install in Apple’s window when it appears.';
+
+async function appleInstallerRunning(): Promise<boolean> {
+	const result = await spawnDirect('/usr/bin/pgrep', ['-x', APPLE_INSTALLER], 5_000);
+	return result.exitCode === 0;
+}
+
+/**
+ * Bring the running installer to the front. `open` on an app that's already
+ * running only activates it, and unlike `osascript … activate` it needs no
+ * Automation permission (another system dialog is the last thing we want).
+ * Best effort.
+ */
+async function raiseAppleInstaller(): Promise<void> {
+	await spawnDirect('/usr/bin/open', [`/System/Library/CoreServices/${APPLE_INSTALLER}.app`], 5_000);
 }
 
 export async function installTool(plan: InstallPlan, onProgress: Progress, log: (line: string) => void): Promise<InstallResult> {

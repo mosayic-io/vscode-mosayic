@@ -363,6 +363,18 @@ a command line. Nothing here is logged beyond "stored" / "forgotten" /
 `SecretStorage`. Not yet run against a real Supabase account: John runs the
 first create on his own.
 
+## 0.2.26 (2026-11-09): Apple's git installer, surfaced
+
+`installViaCommand` on macOS (`xcode-select --install`) watches the window it
+opens, `Install Command Line Developer Tools` (`pgrep -x`, every 2 s): while
+it runs it is brought to the front up to three times with `open
+/System/Library/CoreServices/<it>.app` (activates the running app; never
+`osascript … activate`, which can raise an Automation consent dialog), and
+once it has been seen and then gone for 10 s with no git, the install fails
+at once with `APPLE_INSTALLER_CLOSED` ("The Apple installer was closed…" —
+the studio's setup sheet matches that opening) instead of polling out the
+15 minutes. Not yet run on a Mac without git.
+
 ## 0.2.23 (2026-11-08, John's Windows test)
 
 - **One Claude Code install at a time** (`wsClient._claudeInstalling`). VS
