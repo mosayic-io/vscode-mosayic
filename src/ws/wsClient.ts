@@ -23,6 +23,7 @@ import {
 	type ProbeSpec,
 } from '../toolchain';
 import { missingProjectFolderMessage } from '../folderErrors';
+import { pickedFolders, rememberPickedFolder } from '../pickedFolders';
 import { acceptableKnowledgeUrl, ensureKnowledge } from '../knowledge';
 import { TerminalRegistry } from './managedTerminal';
 import { SupabaseClient, SupabaseNotConnected } from '../supabase';
@@ -343,7 +344,7 @@ function parseIncoming(raw: unknown): IncomingMessage | undefined {
  * and the active workspace folder, both symlink-resolved.
  */
 function allowedRoots(): string[] {
-	const roots = [realpathSync(homedir())];
+	const roots = [realpathSync(homedir()), ...pickedFolders()];
 	const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 	if (workspace) {
 		try {
@@ -1435,6 +1436,7 @@ export class MosayicWebSocketClient implements vscode.Disposable {
 			this._clearAttention(attentionId);
 			const path = uris?.[0]?.fsPath ?? null;
 			this._log(path ? `Folder selected: ${path}` : 'Folder picker cancelled');
+			if (path) { rememberPickedFolder(path); }
 			this._sendJson({ type: 'pick_folder_result', request_id: requestId, path });
 
 			if (path) {

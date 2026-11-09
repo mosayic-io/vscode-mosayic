@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.27] - 2026-11-09
+
+### Fixed
+- **Projects outside your user folder work now.** On Windows especially, choosing a folder like `C:\rn` or `D:\dev` for your project made Get started fail with "couldn't write your app's name into its app.json": the code downloaded, but the extension then refused to read it because it wasn't inside your user folder. A folder you choose yourself in VS Code's folder picker is now trusted (and remembered), so everything Mosayic does in it works. Folders you never chose are still off limits.
+
 ## [0.2.26] - 2026-11-09
 
 ### Fixed

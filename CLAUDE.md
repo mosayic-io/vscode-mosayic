@@ -363,6 +363,18 @@ a command line. Nothing here is logged beyond "stored" / "forgotten" /
 `SecretStorage`. Not yet run against a real Supabase account: John runs the
 first create on his own.
 
+## 0.2.27 (2026-11-09): folders the student picked are allowed roots
+
+`src/pickedFolders.ts`: every folder returned by `pick_folder` (VS Code's own
+dialog) is remembered in `globalState` (`mosayic.pickedFolders`, newest
+first, 50 max, realpath'd) and `allowedRoots()` includes them beside $HOME
+and the workspace. Before this, a Windows student who picked `C:\rn` got the
+clone (shell commands aren't path-guarded) and then a refused `read_file` of
+app.json: "Path is outside allowed directories", every scaffold outside the
+profile failed at naming (ofentsenglazi, 2026-11-09). The guard's purpose is
+unchanged: the backend can't name a folder the student never chose. Folders
+picked on an older extension aren't remembered; picking again fixes it.
+
 ## 0.2.26 (2026-11-09): Apple's git installer, surfaced
 
 `installViaCommand` on macOS (`xcode-select --install`) watches the window it
