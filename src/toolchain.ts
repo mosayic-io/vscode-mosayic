@@ -204,7 +204,7 @@ export function toolchainEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Proc
  * build terminal until VS Code was restarted. VS Code adds `env` to its own
  * environment, so only PATH is replaced, and only when it changed.
  */
-export function mosayicTerminalOptions(): Pick<vscode.TerminalOptions, 'shellPath' | 'shellArgs' | 'env'> {
+export function mosayicTerminalOptions(): Pick<vscode.TerminalOptions, 'shellPath' | 'shellArgs' | 'env' | 'hideFromUser'> {
 	const shell = terminalShellOptions();
 	const base = process.env;
 	const env = toolchainEnv(base);
@@ -212,8 +212,24 @@ export function mosayicTerminalOptions(): Pick<vscode.TerminalOptions, 'shellPat
 	const extra: Record<string, string> = {};
 	if (env !== base && env[key]) { extra[key] = env[key]; }
 	const merged = { ...(shell.env ?? {}), ...extra };
-	return { ...shell, ...(Object.keys(merged).length ? { env: merged } : {}) };
+	return { ...shell, ...KEEP_PYTHON_OUT, ...(Object.keys(merged).length ? { env: merged } : {}) };
 }
+
+/**
+ * Keeps the Python extensions from typing into Mosayic's terminals.
+ *
+ * With ms-python installed, every new terminal got `source …/activate` typed
+ * into it, racing the command we had just sent: `npm run dev` for an Astro
+ * site ended up inside a uv virtualenv, or never ran (John, Eric's call
+ * 2026-11-09; the old workaround was disabling the Python extension).
+ * Both of Python's auto-activators skip a terminal CREATED with
+ * `hideFromUser` (ms-python.python 2026.4's auto-activator, and
+ * ms-python.vscode-python-envs 1.36's `shouldSkipTerminalActivation`, which
+ * also skips pseudoterminals). The terminal still appears: every caller
+ * runs `terminal.show()` straight after creating it, which is what
+ * `hideFromUser` waits for. Their own terminals are untouched.
+ */
+export const KEEP_PYTHON_OUT = { hideFromUser: true } as const;
 
 interface RunResult { exitCode: number | null; stdout: string; stderr: string }
 

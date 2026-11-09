@@ -363,6 +363,23 @@ a command line. Nothing here is logged beyond "stored" / "forgotten" /
 `SecretStorage`. Not yet run against a real Supabase account: John runs the
 first create on his own.
 
+## 0.2.28 (2026-11-09): Python stays out of our terminals; Claude's reason
+
+- **`KEEP_PYTHON_OUT`** (`toolchain.ts`, `{hideFromUser: true}`) is in
+  `mosayicTerminalOptions()` and the dev-server pty (`managedTerminal.ts`).
+  Both Python auto-activators skip a terminal CREATED hidden
+  (ms-python.python 2026.4: `creationOptions.hideFromUser`;
+  ms-python.vscode-python-envs 1.36: `shouldSkipTerminalActivation`, which
+  also skips a pty), and every caller `show()`s it at once. Before this,
+  `source …/activate` was typed into each new terminal, racing our command
+  (Eric's call: an Astro `npm run dev` that never ran; the old workaround was
+  disabling the Python extension). Not yet watched with the Python
+  extension installed. **Any new `createTerminal` must spread it too.**
+- A `claude -p` that fails with empty stderr reports the result event's text
+  as `error` (a usage limit, a lapsed login), not "claude exited with code
+  N". The API (0.70.10) also prefers `result_text` over that generic error
+  for older extensions.
+
 ## 0.2.27 (2026-11-09): folders the student picked are allowed roots
 
 `src/pickedFolders.ts`: every folder returned by `pick_folder` (VS Code's own

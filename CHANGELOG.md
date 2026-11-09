@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.28] - 2026-11-09
+
+### Fixed
+- **The Python extension no longer takes over Mosayic's terminals.** With Microsoft's Python extension installed, every terminal Mosayic opened (to start your website, your app or your backend) got a `source …/activate` typed into it, which could stop the real command from running. Mosayic's terminals now tell the Python extension to leave them alone; your own terminals still activate your Python environment as before.
+- **A Claude run that Claude stops itself now says why** (a usage limit, a sign-in that lapsed, an API error) instead of "claude exited with code 1".
+
 ## [0.2.27] - 2026-11-09
 
 ### Fixed

@@ -812,7 +812,15 @@ export function runClaudeHeadless(
 			+ ` cost=${costUsd != null ? `$${costUsd.toFixed(2)}` : '?'}`
 			+ ` stop=${stopReason ?? '-'} refused=${denials.length}`,
 		);
-		finish(exitCode, exitCode === 0 ? null : (stderr.trim().slice(0, 500) || `claude exited with code ${exitCode}`));
+		// A run Claude ends itself (a usage limit, a lapsed login, an API
+		// error) writes nothing to stderr: the reason is the result event's
+		// text. The bare "exited with code 1" used to win, so the studio's
+		// alert said nothing (appmonstersa, 2026-11-09: 2 s, 0 tokens).
+		finish(exitCode, exitCode === 0 ? null : (
+			stderr.trim().slice(0, 500)
+			|| resultText?.trim().slice(0, 500)
+			|| `claude exited with code ${exitCode}`
+		));
 	});
 	child.on('error', (err) => {
 		log(`  claude -p process error: ${err.message}`);

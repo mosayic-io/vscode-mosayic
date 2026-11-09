@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { spawn, type ChildProcess } from 'child_process';
 import { resolveCommandShell } from '../shell';
-import { toolchainEnv } from '../toolchain';
+import { KEEP_PYTHON_OUT, toolchainEnv } from '../toolchain';
 
 /**
  * A managed terminal that wraps a child process in a VS Code Pseudoterminal.
@@ -131,6 +131,9 @@ export class TerminalRegistry {
 			name,
 			pty,
 			iconPath: new vscode.ThemeIcon('rocket'),
+			// The classic Python extension skips only hideFromUser, not a pty,
+			// and would type `source …` into the dev server's stdin.
+			...KEEP_PYTHON_OUT,
 		});
 		terminal.show();
 
