@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.30] - 2026-11-13
+
+### Fixed
+- **Docker is found on a Mac even when it isn't on your PATH.** Docker Desktop only puts its `docker` command where everything can see it when you give it your password the first time it opens, and not at all when the app isn't in your Applications folder. Mosayic now looks in Docker's own folders, and finds Docker Desktop wherever it is, so "Docker isn't installed" no longer shows while Docker is running.
+
 ## [0.2.29] - 2026-11-13
 
 ### Fixed

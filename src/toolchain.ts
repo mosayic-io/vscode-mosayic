@@ -155,6 +155,60 @@ export function registryPathDirs(): string[] {
 	return dirs;
 }
 
+// ── macOS: Docker's CLI wherever Docker Desktop put it ──────────────────
+// Docker Desktop only links `docker` into /usr/local/bin when it's given the
+// admin password on first launch. Otherwise the CLI lives in ~/.docker/bin,
+// on nobody's PATH, or only inside the app: Docker.app/Contents/Resources/bin.
+// Students who never drag apps into Applications (VS Code and Docker both
+// run from Downloads or a cloud folder, 2026-11-13, two reports and a poll of
+// "docker: command not found" in Sentry) have Docker running and no `docker`.
+// So add Docker's own bin folders LAST: the app's folder is found from its
+// running process, then Spotlight. Cached for 30 s: it's read on every spawn.
+let macPathCache: { at: number; dirs: string[] } | null = null;
+
+function dockerAppBin(appPath: string): string {
+	return join(appPath, 'Contents', 'Resources', 'bin');
+}
+
+/** Docker.app wherever it is: the running app first, then Spotlight. */
+function locateDockerApps(): string[] {
+	const found: string[] = [];
+	try {
+		const out = execFileSync('ps', ['-axo', 'comm='], { encoding: 'utf8', timeout: 3000 });
+		for (const line of out.split('\n')) {
+			const m = /^(.*\/Docker\.app)\/Contents\//.exec(line.trim());
+			if (m) { found.push(m[1]); }
+		}
+	} catch { /* ps refused: Spotlight next */ }
+	if (found.length === 0) {
+		try {
+			const out = execFileSync('mdfind', ['kMDItemCFBundleIdentifier == "com.docker.docker"'], { encoding: 'utf8', timeout: 3000 });
+			found.push(...out.split('\n').map((l) => l.trim()).filter((l) => l.endsWith('.app')));
+		} catch { /* Spotlight off or slow: nothing more to add */ }
+	}
+	return [...new Set(found)];
+}
+
+export function macPathDirs(): string[] {
+	if (process.platform !== 'darwin') { return []; }
+	if (macPathCache && Date.now() - macPathCache.at < 30_000) { return macPathCache.dirs; }
+	const home = homedir();
+	const known = [
+		join(home, '.docker', 'bin'),
+		dockerAppBin('/Applications/Docker.app'),
+		dockerAppBin(join(home, 'Applications', 'Docker.app')),
+		// A GUI-launched VS Code whose shell lookup failed has launchd's
+		// /usr/bin:/bin:/usr/sbin:/sbin and nothing else.
+		'/usr/local/bin',
+		'/opt/homebrew/bin',
+	];
+	const dockerFound = known.slice(0, 3).some((d) => existsSync(join(d, 'docker')));
+	const elsewhere = dockerFound ? [] : locateDockerApps().map(dockerAppBin);
+	const dirs = [...known, ...elsewhere].filter((d) => existsSync(d));
+	macPathCache = { at: Date.now(), dirs };
+	return dirs;
+}
+
 /** PATH entries compared the way the platform compares them. */
 function sameDirKey(dir: string): string {
 	return process.platform === 'win32' ? dir.replace(/[\\/]+$/, '').toLowerCase() : dir;
@@ -173,7 +227,7 @@ function sameDirKey(dir: string): string {
  */
 export function toolchainEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	const dirs = managedBinDirs();
-	const fresh = registryPathDirs();
+	const fresh = [...registryPathDirs(), ...macPathDirs()];
 	if (dirs.length === 0 && fresh.length === 0) { return base; }
 	// Windows' env keys are case-insensitive but Node's object is not, so find
 	// the real key rather than assuming "PATH".

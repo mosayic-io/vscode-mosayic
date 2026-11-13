@@ -363,6 +363,20 @@ a command line. Nothing here is logged beyond "stored" / "forgotten" /
 `SecretStorage`. Not yet run against a real Supabase account: John runs the
 first create on his own.
 
+## 0.2.30 (2026-11-13): Docker found on a Mac without PATH help
+
+`macPathDirs` (`toolchain.ts`), appended by `toolchainEnv()` like Windows'
+registry dirs (so the student's own order wins): `~/.docker/bin` (Docker
+Desktop's no-password "user" install), `Docker.app/Contents/Resources/bin`
+in /Applications and ~/Applications, `/usr/local/bin` + `/opt/homebrew/bin`
+(a GUI-launched VS Code whose shell lookup failed has launchd's bare PATH),
+and, when none of those has `docker`, Docker.app wherever it lives: from its
+running process (`ps -axo comm=`), else Spotlight (`mdfind` on
+`com.docker.docker`). Cached 30 s. Two students on 2026-11-13 ran VS Code (and
+so likely Docker) from outside Applications, and the studio's Docker poll got
+`/bin/sh: docker: command not found` every 5 s with Docker up. Tested with
+launchd's PATH on John's Mac; the off-Applications case not run for real.
+
 ## 0.2.29 (2026-11-13): two install fixes from Slack
 
 - **Unpacking reports progress.** `installArchive` sends "Still unpacking…"
