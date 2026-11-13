@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.29] - 2026-11-13
+
+### Fixed
+- **Installing Expo's EAS tool no longer fails on a Mac whose npm folder needs a password.** When npm can't write to its shared folder, Mosayic installs the tool in your own user folder instead and makes it available to everything it runs. Nothing asks for a password.
+- **Installing Google Cloud's tools on Windows no longer looks like it stopped.** Unpacking them takes several minutes with nothing to show; the extension now says "Still unpacking…" while it works, so the studio keeps waiting instead of reporting a failure.
+
 ## [0.2.28] - 2026-11-09
 
 ### Fixed

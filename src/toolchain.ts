@@ -550,6 +550,22 @@ async function installArchive(plan: Extract<InstallPlan, { kind: 'archive' }>, o
 		}
 
 		onProgress('Unpacking…', { phase: 'extract' });
+		// Unpacking says nothing while it works, and a big archive on Windows
+		// (gcloud's zip, tens of thousands of files past Defender) takes six or
+		// seven minutes. The API reads five minutes of silence as a stuck
+		// install, so two students were told it had failed while it was about
+		// to finish (2026-11-13). Say something every 20 seconds.
+		const unpackStarted = Date.now();
+		const stillUnpacking = setInterval(() => {
+			const minutes = Math.floor((Date.now() - unpackStarted) / 60_000);
+			onProgress(
+				minutes < 1
+					? 'Still unpacking…'
+					: `Still unpacking (${minutes} min so far). Big downloads take a few minutes here.`,
+				{ phase: 'extract' },
+			);
+		}, 20_000);
+		try {
 		if (plan.format === '7z-sfx') {
 			// The self-extractor writes the tree itself; no strip needed.
 			await extract(archive, dest, plan.format);
@@ -564,6 +580,9 @@ async function installArchive(plan: Extract<InstallPlan, { kind: 'archive' }>, o
 				// Different filesystems (tmp on its own volume) — fall back to a copy.
 				cpSync(source, dest, { recursive: true });
 			}
+		}
+		} finally {
+			clearInterval(stillUnpacking);
 		}
 
 		const bin = plan.bin_subdir ? join(dest, plan.bin_subdir) : dest;
@@ -614,6 +633,56 @@ async function installViaShell(command: string, plan: InstallPlan, onProgress: P
 	}
 	const tail = (result.stderr || result.stdout).trim().split(/\r?\n/).slice(-3).join(' ');
 	return { status: 'error', error: tail || `That didn't install ${plan.key}.` };
+}
+
+/** npm refusing to write its global folder (a root-owned /usr/local, the nodejs.org installer's default). */
+const NPM_PERMISSION = /EACCES|EPERM|permissions issue|permission denied/i;
+
+/**
+ * `npm install -g`, and when npm isn't allowed to write its global folder, the
+ * same package into a folder of ours instead.
+ *
+ * A Mac whose Node came from nodejs.org's installer keeps global packages
+ * under /usr/local, owned by root: `npm install -g eas-cli` ends in EACCES
+ * and the only advice npm has is "run it as root" (a student, 2026-11-12).
+ * We never ask for a password, so the package goes under ~/.mosayic/tools/npm
+ * and onto PATH like any tool we unpack, and is removable the same way.
+ */
+async function installViaNpm(plan: Extract<InstallPlan, { kind: 'npm' }>, onProgress: Progress, log: (line: string) => void): Promise<InstallResult> {
+	onProgress('Working…', { phase: 'install' });
+	const first = await runShell(`npm install -g ${plan.package}`, 20 * 60_000, (line) => onProgress(line, { phase: 'install' }));
+	let checked = await verify(plan);
+	if (checked.ok) {
+		return { status: 'installed', version: checked.version, path: await whereIs(plan.key) };
+	}
+	const tailOf = (r: RunResult) => (r.stderr || r.stdout).trim().split(/\r?\n/).slice(-3).join(' ');
+	if (!NPM_PERMISSION.test(`${first.stderr}\n${first.stdout}`)) {
+		return { status: 'error', error: tailOf(first) || `That didn't install ${plan.key}.` };
+	}
+
+	const prefix = join(managedRoot(), 'npm', plan.key);
+	log(`npm can't write its global folder; installing ${plan.package} under ${prefix}`);
+	onProgress('Your computer keeps npm’s shared folder locked, so this goes in a folder of its own…', { phase: 'install' });
+	mkdirSync(prefix, { recursive: true });
+	const second = await runShell(`npm install -g --prefix "${prefix}" ${plan.package}`, 20 * 60_000, (line) => onProgress(line, { phase: 'install' }));
+	const bin = process.platform === 'win32' ? prefix : join(prefix, 'bin');
+	if (second.exitCode !== 0 || !existsSync(bin)) {
+		return { status: 'error', error: tailOf(second) || tailOf(first) || `That didn't install ${plan.key}.` };
+	}
+	const manifest = readManifest();
+	manifest.tools[plan.key] = {
+		key: plan.key, version: '', dir: prefix, bin,
+		url: `npm:${plan.package}`, installed_at: new Date().toISOString(),
+		placement: 'mosayic',
+	};
+	writeManifest(manifest);
+	onProgress('Putting it on your PATH…', { phase: 'path' });
+	await exportPath();
+	checked = await verify(plan);
+	if (!checked.ok) {
+		return { status: 'error', error: `${plan.key} was installed to ${prefix} but still isn't running. Restart VS Code and try again.` };
+	}
+	return { status: 'installed', version: checked.version, path: bin };
 }
 
 /**
@@ -699,7 +768,7 @@ export async function installTool(plan: InstallPlan, onProgress: Progress, log: 
 			case 'manager':
 				return await installViaShell(plan.command, plan, onProgress);
 			case 'npm':
-				return await installViaShell(`npm install -g ${plan.package}`, plan, onProgress);
+				return await installViaNpm(plan, onProgress, log);
 			case 'command':
 				return await installViaCommand(plan, onProgress);
 			default:

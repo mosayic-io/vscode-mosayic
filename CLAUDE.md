@@ -363,6 +363,17 @@ a command line. Nothing here is logged beyond "stored" / "forgotten" /
 `SecretStorage`. Not yet run against a real Supabase account: John runs the
 first create on his own.
 
+## 0.2.29 (2026-11-13): two install fixes from Slack
+
+- **Unpacking reports progress.** `installArchive` sends "Still unpacking…"
+  every 20 s while the archive unpacks: gcloud's zip takes six or seven
+  minutes on Windows and the API read the silence as a stuck install.
+- **npm without permission.** `installViaNpm`: when `npm install -g` ends in
+  EACCES / EPERM (a root-owned `/usr/local`, the nodejs.org installer), the
+  package goes to `~/.mosayic/tools/npm/<key>` with `--prefix`, into the
+  manifest and onto PATH like an unpacked tool, removable the same way. No
+  password is ever asked for. Not run on a machine with a locked prefix.
+
 ## 0.2.28 (2026-11-09): Python stays out of our terminals; Claude's reason
 
 - **`KEEP_PYTHON_OUT`** (`toolchain.ts`, `{hideFromUser: true}`) is in
