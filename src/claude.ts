@@ -51,6 +51,7 @@ function claudeEnv(): NodeJS.ProcessEnv {
 export const CLAUDE_EXTENSION_ID = 'anthropic.claude-code';
 
 const AUTH_STATUS_TIMEOUT_MS = 20_000;
+const TIMED_OUT_PREFIX = 'no answer after';
 // Long enough to cover VS Code's own trust prompt. Installing an extension
 // can ask the student whether they trust the publisher, and 15s expired
 // while that dialog was still on screen — so a perfectly good install
@@ -157,13 +158,21 @@ function runCaptured(
 	spec: SpawnSpec,
 	opts: { cwd: string; timeoutMs: number },
 ): Promise<{ stdout: string; stderr: string; exitCode: number; spawnError: string | null }> {
+	// Our own deadline, not spawn's `timeout`: that only sends SIGTERM, and
+	// 'close' then waits for every holder of the output pipes, so a `claude`
+	// that ignores the signal (or a helper it started, still holding stdout)
+	// kept this promise open past the backend's 30 s wait, and the studio got
+	// a 504 instead of an answer (2026-11-14, a Mac, twice in one morning).
+	// At the deadline the process is killed outright and we answer anyway.
 	return new Promise((resolve) => {
 		let stdout = '';
 		let stderr = '';
 		let settled = false;
+		let timer: NodeJS.Timeout | undefined;
 		const finish = (exitCode: number, spawnError: string | null = null) => {
 			if (settled) { return; }
 			settled = true;
+			if (timer) { clearTimeout(timer); }
 			resolve({ stdout, stderr, exitCode, spawnError });
 		};
 		let child: ChildProcess;
@@ -171,13 +180,16 @@ function runCaptured(
 			child = spawn(spec.command, spec.args, {
 				shell: spec.shell,
 				cwd: opts.cwd,
-				timeout: opts.timeoutMs,
 				env: claudeEnv(),
 			});
 		} catch (err) {
 			finish(1, err instanceof Error ? err.message : String(err));
 			return;
 		}
+		timer = setTimeout(() => {
+			try { child.kill('SIGKILL'); } catch { /* already gone */ }
+			finish(124, `${TIMED_OUT_PREFIX} ${Math.round(opts.timeoutMs / 1000)}s`);
+		}, opts.timeoutMs);
 		child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
 		child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
 		child.on('close', (code) => finish(code ?? 1));
@@ -241,6 +253,14 @@ export async function getClaudeStatus(log: (line: string) => void): Promise<Clau
 	// No JSON: either there is no `claude` at all (exit 127 / ENOENT) or the
 	// CLI printed something we don't understand. Say which.
 	const combined = `${result.stderr}\n${result.stdout}`.trim();
+	if (result.spawnError?.startsWith(TIMED_OUT_PREFIX)) {
+		status.cli = binary.kind;
+		status.error = 'Claude Code did not answer when asked whether you are signed in. '
+			+ 'If a window is asking for permission (a Mac can ask whether Claude may use the keychain), '
+			+ 'allow it, then check again. Otherwise reload VS Code and check again.';
+		log(`claude auth status (${binary.kind}) gave ${result.spawnError}; killed it`);
+		return status;
+	}
 	const notFound = result.spawnError?.includes('ENOENT')
 		|| result.exitCode === 127
 		|| /not found|not recognized/i.test(combined);

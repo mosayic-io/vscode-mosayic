@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.31] - 2026-11-14
+
+### Fixed
+- **Checking whether Claude Code is signed in always gets an answer.** When Claude Code didn't reply, the check could wait forever and the studio gave up with an error. Mosayic now stops it after 20 seconds and tells you what to try.
+
 ## [0.2.30] - 2026-11-13
 
 ### Fixed

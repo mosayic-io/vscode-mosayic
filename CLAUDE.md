@@ -363,6 +363,18 @@ a command line. Nothing here is logged beyond "stored" / "forgotten" /
 `SecretStorage`. Not yet run against a real Supabase account: John runs the
 first create on his own.
 
+## 0.2.31 (2026-11-14): the Claude check always answers
+
+`runCaptured` (`claude.ts`) keeps its OWN deadline instead of spawn's
+`timeout`: that only sent SIGTERM, and 'close' waits for every holder of the
+output pipes, so a `claude auth status` that ignored the signal (or a helper
+it started, still holding stdout) kept `claude_status` open past the API's
+30 s, a 504 alert twice in one morning from one Mac. At the deadline (20 s)
+the process is SIGKILLed and the promise resolves with `spawnError` `no answer
+after 20s`; `getClaudeStatus` turns that into `error` in words (allow a
+permission window, a Mac's keychain being one guess, else reload VS Code),
+which the studio's sign-in card shows. Why `claude` hung is unknown.
+
 ## 0.2.30 (2026-11-13): Docker found on a Mac without PATH help
 
 `macPathDirs` (`toolchain.ts`), appended by `toolchainEnv()` like Windows'
