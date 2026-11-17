@@ -28,8 +28,8 @@ import { execFileSync, spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { cpSync, createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
 import { get as httpsGet } from 'https';
-import { homedir, tmpdir } from 'os';
-import { delimiter, dirname, join } from 'path';
+import { homedir, tmpdir, userInfo } from 'os';
+import { delimiter, dirname, isAbsolute, join } from 'path';
 import type * as vscode from 'vscode';
 import { resolveShellChoice, terminalShellOptions } from './shell';
 
@@ -209,6 +209,79 @@ export function macPathDirs(): string[] {
 	return dirs;
 }
 
+// ── macOS / Linux: the PATH the student's own terminal has ──────────────
+// Relayed commands run in /bin/sh with the extension host's PATH. VS Code
+// tries to copy the login shell's environment when it's opened from the Dock,
+// but that lookup times out on a slow profile, and it's a snapshot from when
+// VS Code started. So a tool only the student's ~/.zshrc knows about (a
+// gcloud unpacked into ~/google-cloud-sdk, nvm's node, a brew installed
+// after VS Code opened) was "command not found" here while it worked in
+// their terminal (John, 2026-11-17: "/bin/sh: gcloud: command not found" on
+// creating a Google Cloud project). The shell stays /bin/sh, since
+// everything relayed is POSIX and a student's shell may be fish; only its
+// PATH is borrowed: ask their login shell once, in the background, and
+// append what's new. Never blocks a spawn: a stale answer is used while a
+// fresh one is fetched.
+const LOGIN_PATH_FRESH_MS = 30_000;
+const LOGIN_PATH_DEADLINE_MS = 8_000;
+let loginPathCache: { at: number; dirs: string[] } | null = null;
+let loginPathPending: Promise<void> | null = null;
+
+/** Ask the login shell for its PATH now. Resolves when it has answered or the deadline passed. */
+export function refreshLoginShellPath(): Promise<void> {
+	if (process.platform === 'win32') { return Promise.resolve(); }
+	if (loginPathPending) { return loginPathPending; }
+	loginPathPending = new Promise<void>((resolve) => {
+		let userShell = process.env.SHELL;
+		if (!userShell) {
+			try { userShell = userInfo().shell ?? undefined; } catch { /* no passwd entry */ }
+		}
+		if (!userShell || !isAbsolute(userShell) || !existsSync(userShell)) { userShell = '/bin/zsh'; }
+		let out = '';
+		let settled = false;
+		const finish = (dirs: string[] | null) => {
+			if (settled) { return; }
+			settled = true;
+			clearTimeout(deadline);
+			// No answer keeps the last good one, but still counts as asked, so
+			// a profile that hangs isn't started again on every spawn.
+			loginPathCache = { at: Date.now(), dirs: dirs ?? loginPathCache?.dirs ?? [] };
+			loginPathPending = null;
+			resolve();
+		};
+		// Our own deadline (the 0.2.31 lesson): spawn's `timeout` only signals,
+		// and 'close' waits for anything a profile left holding the pipe.
+		const deadline = setTimeout(() => {
+			try { child.kill('SIGKILL'); } catch { /* already gone */ }
+			finish(null);
+		}, LOGIN_PATH_DEADLINE_MS);
+		// Markers, because profiles print things. -i -l -c is what VS Code
+		// itself passes for the same job.
+		const child = spawn(userShell, ['-i', '-l', '-c', 'printf "__MOSAYIC_PATH__%s__MOSAYIC_END__" "$PATH"'], {
+			stdio: ['ignore', 'pipe', 'ignore'],
+			env: process.env,
+		});
+		child.stdout?.on('data', (d) => {
+			out += String(d);
+			const m = /__MOSAYIC_PATH__(.*?)__MOSAYIC_END__/s.exec(out);
+			if (m) {
+				finish(m[1].split(delimiter).map((s) => s.trim()).filter((s) => s && isAbsolute(s)));
+			}
+		});
+		child.on('error', () => finish(null));
+		child.on('close', () => finish(null));
+	});
+	return loginPathPending;
+}
+
+function loginShellPathDirs(): string[] {
+	if (process.platform === 'win32') { return []; }
+	if (!loginPathCache || Date.now() - loginPathCache.at > LOGIN_PATH_FRESH_MS) {
+		void refreshLoginShellPath();
+	}
+	return (loginPathCache?.dirs ?? []).filter((d) => existsSync(d));
+}
+
 /** PATH entries compared the way the platform compares them. */
 function sameDirKey(dir: string): string {
 	return process.platform === 'win32' ? dir.replace(/[\\/]+$/, '').toLowerCase() : dir;
@@ -227,7 +300,7 @@ function sameDirKey(dir: string): string {
  */
 export function toolchainEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	const dirs = managedBinDirs();
-	const fresh = [...registryPathDirs(), ...macPathDirs()];
+	const fresh = [...registryPathDirs(), ...loginShellPathDirs(), ...macPathDirs()];
 	if (dirs.length === 0 && fresh.length === 0) { return base; }
 	// Windows' env keys are case-insensitive but Node's object is not, so find
 	// the real key rather than assuming "PATH".
@@ -563,6 +636,8 @@ async function verify(plan: InstallPlan): Promise<{ ok: boolean; version: string
 	// installed") was invisible for up to 30 s of cache, so a good install
 	// was reported failed (John, 2026-11-08, Windows).
 	registryPathCache = null;
+	// And the login shell's PATH: brew or nvm may have just put it somewhere new.
+	await refreshLoginShellPath();
 	const result = await runShell(plan.verify, 60_000);
 	return {
 		ok: result.exitCode === 0,

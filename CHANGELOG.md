@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.32] - 2026-11-17
+
+### Fixed
+- **Tools that work in your own terminal are found on a Mac and on Linux.** A tool your terminal's setup file adds (Google Cloud's `gcloud`, a Node from nvm, anything from Homebrew installed while VS Code was open) could be "command not found" to Mosayic. Mosayic now reads the same list of folders your terminal uses, so what works there works here.
+
 ## [0.2.31] - 2026-11-14
 
 ### Fixed

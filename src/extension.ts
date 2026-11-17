@@ -18,6 +18,7 @@ import {
 import { runDockerPreflight } from './docker';
 import { initKnowledge } from './knowledge';
 import { initPickedFolders } from './pickedFolders';
+import { refreshLoginShellPath } from './toolchain';
 
 // Last backend URL that issued the currently stored session tokens. If the
 // resolved API URL no longer matches, the session is stale (user switched
@@ -30,6 +31,8 @@ export function activate(context: vscode.ExtensionContext) {
 	// in a project or ~/.claude (knowledge.ts).
 	initKnowledge(context.globalStorageUri.fsPath);
 	initPickedFolders(context.globalState);
+	// The student's own terminal PATH, ready before the first relayed command.
+	void refreshLoginShellPath();
 
 	const uriHandler = new UriEventHandler();
 	context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));

@@ -363,6 +363,25 @@ a command line. Nothing here is logged beyond "stored" / "forgotten" /
 `SecretStorage`. Not yet run against a real Supabase account: John runs the
 first create on his own.
 
+## 0.2.32 (2026-11-17): the student's terminal PATH on macOS / Linux
+
+`loginShellPathDirs` (`toolchain.ts`), appended by `toolchainEnv()` before
+`macPathDirs` (the PATH VS Code had still wins): the PATH of the student's
+own login shell, read with `$SHELL -i -l -c 'printf …"$PATH"'` between
+markers (what VS Code itself runs), in the background at activation and
+again when a spawn finds the answer over 30 s old (the stale one is used
+meanwhile, so no spawn ever waits); `verify()` awaits a fresh read. Its own
+8 s deadline with SIGKILL; no answer keeps the last good one. **The shell
+stays /bin/sh** (everything relayed is POSIX; a student's shell may be
+fish): only the PATH is borrowed. Why: a "Tell John" report of "/bin/sh:
+gcloud: command not found" on creating a Google Cloud project (whose machine,
+and whether gcloud was on it at all, isn't known; a gcloud in a folder only
+`.zshrc` adds, like John's `/opt/homebrew/share/google-cloud-sdk/bin`, is
+the case this closes). VS Code's own
+copy of the shell environment is a snapshot from when it started and is
+skipped when the profile is slow. Checked from launchd's bare PATH on John's
+Mac at the command line; not yet run inside the extension host.
+
 ## 0.2.31 (2026-11-14): the Claude check always answers
 
 `runCaptured` (`claude.ts`) keeps its OWN deadline instead of spawn's
