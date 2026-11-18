@@ -496,17 +496,39 @@ function windowsTar(): string {
 	return join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
 }
 
-function spawnDirect(command: string, args: string[], timeoutMs: number): Promise<RunResult> {
+/**
+ * Run a binary directly. Its own timer and SIGKILL rather than spawn's
+ * `timeout` (a SIGTERM): `timedOut` says the clock ran out, because a killed
+ * tar leaves no stderr and the student was told only "Windows could not
+ * unpack the download" (2026-11-18, gcloud stuck past the ten-minute cap).
+ */
+function spawnDirect(command: string, args: string[], timeoutMs: number): Promise<RunResult & { timedOut: boolean }> {
 	return new Promise((resolve) => {
-		const child = spawn(command, args, { env: toolchainEnv(), timeout: timeoutMs });
+		const child = spawn(command, args, { env: toolchainEnv() });
 		let stdout = '';
 		let stderr = '';
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			try { child.kill('SIGKILL'); } catch { /* already gone */ }
+		}, timeoutMs);
 		child.stdout?.on('data', (d) => { stdout += String(d); });
 		child.stderr?.on('data', (d) => { stderr += String(d); });
-		child.on('error', (err) => resolve({ exitCode: 1, stdout, stderr: `${stderr}${err.message}` }));
-		child.on('close', (code) => resolve({ exitCode: code, stdout, stderr }));
+		child.on('error', (err) => { clearTimeout(timer); resolve({ exitCode: 1, stdout, stderr: `${stderr}${err.message}`, timedOut }); });
+		child.on('close', (code) => { clearTimeout(timer); resolve({ exitCode: code, stdout, stderr, timedOut }); });
 	});
 }
+
+/**
+ * How long one unpack may run. gcloud's zip on Windows takes six or seven
+ * minutes under Defender; one that hasn't finished in ten is stuck, not slow
+ * (2026-11-18: four tries on one laptop, each cut off at the same point).
+ * The progress ticker keeps the API's silence window open meanwhile.
+ */
+const UNPACK_TIMEOUT_MS = 10 * 60_000;
+const UNPACK_TIMED_OUT =
+	'Unpacking the download got stuck: it was still going after 10 minutes, so Mosayic stopped it. ' +
+	'Something on this computer, often antivirus software, is holding the files. Tell John and he\'ll help you get it installed.';
 
 /** Unpack `archive` into `into`, which is created fresh. */
 async function extract(archive: string, into: string, format: string): Promise<void> {
@@ -514,22 +536,27 @@ async function extract(archive: string, into: string, format: string): Promise<v
 	if (format === '7z-sfx') {
 		// PortableGit ships as a 7-Zip self-extracting .exe: -o<dir> is the
 		// destination, -y answers its prompts. No installer, no admin rights.
-		const result = await spawnDirect(archive, [`-o${into}`, '-y'], 10 * 60_000);
+		const result = await spawnDirect(archive, [`-o${into}`, '-y'], UNPACK_TIMEOUT_MS);
+		if (result.timedOut) { throw new Error(UNPACK_TIMED_OUT); }
 		if (result.exitCode !== 0) {
 			throw new Error(result.stderr.trim() || 'The Git archive would not unpack');
 		}
 		return;
 	}
 	if (process.platform === 'win32') {
-		const result = await spawnDirect(windowsTar(), ['-xf', archive, '-C', into], 10 * 60_000);
+		const result = await spawnDirect(windowsTar(), ['-xf', archive, '-C', into], UNPACK_TIMEOUT_MS);
 		if (result.exitCode === 0) { return; }
+		// Out of time is not "no bsdtar": PowerShell is slower still, and
+		// would only double the wait before the same answer.
+		if (result.timedOut) { throw new Error(UNPACK_TIMED_OUT); }
 		// Older Windows without bsdtar: PowerShell can do zips.
 		if (format === 'zip') {
 			const ps = await spawnDirect('powershell.exe', [
 				'-NoProfile', '-NonInteractive', '-Command',
 				`Expand-Archive -LiteralPath '${archive}' -DestinationPath '${into}' -Force`,
-			], 10 * 60_000);
+			], UNPACK_TIMEOUT_MS);
 			if (ps.exitCode === 0) { return; }
+			if (ps.timedOut) { throw new Error(UNPACK_TIMED_OUT); }
 			throw new Error(ps.stderr.trim() || 'Windows could not unpack the download');
 		}
 		throw new Error(result.stderr.trim() || 'Windows could not unpack the download');
@@ -537,7 +564,8 @@ async function extract(archive: string, into: string, format: string): Promise<v
 	const args = format === 'zip'
 		? ['-q', archive, '-d', into]
 		: ['-xzf', archive, '-C', into];
-	const result = await spawnDirect(format === 'zip' ? 'unzip' : 'tar', args, 10 * 60_000);
+	const result = await spawnDirect(format === 'zip' ? 'unzip' : 'tar', args, UNPACK_TIMEOUT_MS);
+	if (result.timedOut) { throw new Error(UNPACK_TIMED_OUT); }
 	if (result.exitCode !== 0) {
 		throw new Error(result.stderr.trim() || 'The download would not unpack');
 	}

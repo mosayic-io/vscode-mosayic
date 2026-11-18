@@ -4,6 +4,11 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.33] - 2026-11-18
+
+### Fixed
+- **A download that gets stuck while unpacking says so.** On Windows, unpacking a big download (Google Cloud's) could stop after ten minutes with only "Windows could not unpack the download". Mosayic now tells you it got stuck and to get in touch, and no longer starts a second, slower attempt after the first one runs out of time.
+
 ## [0.2.32] - 2026-11-17
 
 ### Fixed
