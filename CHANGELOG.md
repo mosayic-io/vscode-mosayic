@@ -4,6 +4,12 @@ All notable changes to the Mosayic VS Code extension are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.34] - 2026-11-19
+
+### Fixed
+- **Git Bash is found wherever Git for Windows is installed.** Mosayic now also looks next to the `git` on your PATH, so a Git installed in a folder of your choosing no longer leaves Mosayic's commands running in cmd.exe.
+- **A git without Git Bash counts as missing on Windows**, so the studio installs one Mosayic can use instead of saying nothing is missing.
+
 ## [0.2.33] - 2026-11-18
 
 ### Fixed

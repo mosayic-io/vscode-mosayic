@@ -415,7 +415,15 @@ export async function probeToolchain(
 	const manifest = readManifest();
 	const probed = await Promise.all(tools.map(async (spec): Promise<ProbedTool> => {
 		const result = await runShell(spec.command, 30_000);
-		const installed = result.exitCode === 0;
+		// On Windows "git" means Git Bash: everything Mosayic relays is a POSIX
+		// line. A git with no bash beside it (MinGit, GitHub Desktop's own)
+		// leaves the extension on cmd.exe, so it reads as missing and the
+		// studio installs PortableGit, which shell.ts then finds.
+		const noGitBash = spec.key === 'git' && process.platform === 'win32' && resolveShellChoice().fellBackToCmd;
+		const installed = result.exitCode === 0 && !noGitBash;
+		if (noGitBash && result.exitCode === 0) {
+			log('toolchain probe: git is on PATH but no Git Bash beside it — reporting git as missing');
+		}
 		if (!installed) {
 			return { key: spec.key, installed: false, version: null, path: null, provenance: null };
 		}

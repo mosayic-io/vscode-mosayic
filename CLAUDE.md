@@ -300,6 +300,15 @@ nvm-windows) was invisible until every VS Code window was quit.
 (`reg query`, `%VAR%` expanded, cached 30 s) and APPENDS what's new, compared
 case-insensitively, so the student's order wins; ours still go first.
 
+**Git Bash beside the git on PATH** (unreleased, 2026-11-19): `findGitBash`
+also looks next to every `git.exe` on PATH (`<root>\bin\bash.exe` /
+`<root>\usr\bin\bash.exe`, root = above `cmd`/`bin`/`mingw64\bin`), for a
+Git for Windows in a folder of the student's choosing; never a bare `bash` on
+PATH (WSL). And `probeToolchain` reports **git as missing on Windows while
+the shell fell back to cmd.exe** (a MinGit / GitHub Desktop git with no bash),
+so the studio installs PortableGit where shell.ts looks. A student's git ran,
+the toolchain said nothing was missing, and "mkdir -p" went to cmd.exe.
+
 **Mosayic's terminals are Git Bash on Windows** (0.2.19, `terminalShellOptions`
 in `shell.ts`; since 0.2.20 through `mosayicTerminalOptions` in
 `toolchain.ts`, which also gives them `toolchainEnv`'s PATH). Every

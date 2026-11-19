@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { basename, delimiter, dirname, join } from 'path';
 
 export type WindowsShellPreference = 'auto' | 'cmd' | 'gitbash' | 'pwsh';
 
@@ -67,6 +67,34 @@ function findGitBash(): string | null {
 	].filter((c): c is string => typeof c === 'string' && c.length > 0);
 	for (const c of candidates) {
 		if (existsSync(c)) { return c; }
+	}
+	return gitBashBesideGitOnPath();
+}
+
+/**
+ * Git Bash next to the git.exe on PATH, for a Git for Windows installed
+ * somewhere of the student's choosing (D:\Git, a company image, …). Seen
+ * 2026-11-18: git ran fine, so the toolchain check said nothing was missing,
+ * while every relayed command went to cmd.exe ("mkdir -p" → "The filename,
+ * directory name, or volume label syntax is incorrect"). Only bash.exe
+ * inside the git install itself counts, never a `bash` on PATH (the WSL trap
+ * above). git.exe lives in <root>\cmd, <root>\bin or <root>\mingw64\bin.
+ */
+function gitBashBesideGitOnPath(): string | null {
+	for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+		if (!dir) { continue; }
+		const git = join(dir, 'git.exe');
+		if (!existsSync(git)) { continue; }
+		const parent = dirname(git);
+		const roots = [dirname(parent)];
+		if (basename(parent).toLowerCase() === 'bin' && basename(dirname(parent)).toLowerCase().startsWith('mingw')) {
+			roots.push(dirname(dirname(parent)));
+		}
+		for (const root of roots) {
+			for (const bash of [join(root, 'bin', 'bash.exe'), join(root, 'usr', 'bin', 'bash.exe')]) {
+				if (existsSync(bash)) { return bash; }
+			}
+		}
 	}
 	return null;
 }
